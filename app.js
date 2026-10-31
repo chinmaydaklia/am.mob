@@ -3,6 +3,9 @@
 // attachment with the phone data password (PBKDF2-SHA256 + AES-256-GCM, gzip inside — same as the ERP), and shows
 // everything from it. The locked file is kept on the phone, so the app also works offline.
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+// Arihant's Google sign-in key (OAuth Client ID, project arihant-erp). Not a secret: it only works from this app's
+// address and for the test users added in Google Cloud. Settings can override it on a phone.
+const DEFAULT_CLIENT_ID = '593179465354-r7d1rf9b1v5orbqk2v1fa5891dp9rb62.apps.googleusercontent.com';
 const QUERY = 'subject:"ARIHANT-ERP" filename:amz';
 const LS = { file: 'am_file', meta: 'am_meta', pw: 'am_pw', client: 'am_client_id', hint: 'am_login_hint', purch: 'am_due_purchase' };
 const ls = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) { toast('Phone storage is full: ' + e.message); } }, del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } } };
@@ -37,7 +40,7 @@ function loadGsi() {
 }
 async function token() {
   if (S.token && Date.now() < S.tokenExp - 60000) return S.token;
-  const client = ls.get(LS.client);
+  const client = ls.get(LS.client) || DEFAULT_CLIENT_ID;
   if (!client) { location.hash = '#/settings'; throw new Error('Enter the Google Client ID in Settings first'); }
   await loadGsi();
   return new Promise((res, rej) => {
@@ -381,7 +384,7 @@ async function archive(q) {
 function settings() {
   const host = location.origin + location.pathname.replace(/[^/]*$/, '');
   frame('Settings', `<div class="card"><h3>Gmail</h3>
-      <div class="fg"><label>Google OAuth Client ID</label><input data-client value="${esc(ls.get(LS.client) || '')}" placeholder="…apps.googleusercontent.com"></div>
+      <div class="fg"><label>Google OAuth Client ID</label><input data-client value="${esc(ls.get(LS.client) || DEFAULT_CLIENT_ID)}" placeholder="…apps.googleusercontent.com"></div>
       <div class="fg"><label>Gmail account</label><input data-hint value="${esc(ls.get(LS.hint) || 'arimedbackup@gmail.com')}"></div>
       <div class="actions"><button class="btn" data-save>Save</button><button class="btn ghost" data-test>Get the latest from Gmail</button></div>
       <div class="muted small" style="margin-top:8px">Set up once in Google Cloud: OAuth client of type <b>Web application</b> with authorised JavaScript origin <b>${esc(location.origin)}</b>, Gmail API enabled, scope gmail.readonly, and the Gmail account added as a test user.</div></div>
@@ -410,7 +413,7 @@ function welcome() {
     <div class="big">Welcome</div><p class="muted">This app shows Arihant Medicos' data that the ERP emails to the Arihant Gmail account after each sync (10 AM, 2 PM, 8 PM).</p>
     <button class="btn block" data-gmail>Sign in to Gmail and get the latest data</button><div style="height:8px"></div>
     <label class="btn ghost block">Open a data file from this phone<input type="file" accept=".amz,application/octet-stream" data-file hidden></label>
-    <p class="muted small">First time: tap Settings to enter the Google Client ID. <a href="#/settings" data-set>Settings</a></p></div></main>`;
+    <p class="muted small">Sign in with <b>arimedbackup@gmail.com</b>. <a href="#/settings" data-set>Settings</a></p></div></main>`;
   $('[data-gmail]').onclick = e => refreshFromGmail(e.target);
   $('[data-file]').onchange = e => openFile(e.target.files[0]);
   $('[data-set]').onclick = e => { e.preventDefault(); S.forceSettings = true; settings(); };
