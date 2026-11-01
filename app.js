@@ -125,8 +125,9 @@ const tabsHtml = (list, tab) => `<div class="tabs">${list.map(([k, l]) => `<butt
 const wireTabs = (base, extra = '') => document.querySelectorAll('[data-tab]').forEach(b => (b.onclick = () => { location.hash = `${base}?tab=${b.dataset.tab}${extra}`; }));
 // periods for analysis; prev = the same length just before (a month: last month, same dates)
 const SPANS = [['7', '7 days'], ['30', '30 days'], ['month', 'This month'], ['90', '90 days'], ['fy', 'This FY']];
-function span(k) {
+function span(k, m = null) {
   const d = S.data, t = d.today;
+  if (k === 'custom' && m) { const from = m + '-01', end = addD(addD(from, 32).slice(0, 8) + '01', -1); return { k, from, to: end < t ? end : t, pfrom: null, pto: null, label: new Date(from).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }), days: daysBetween(from, end < t ? end : t) + 1 }; }
   if (k === 'month') { const from = d.month_start, pm = addD(from, -1).slice(0, 8) + '01'; const n = daysBetween(from, t); const pto = addD(pm, n) < from ? addD(pm, n) : addD(from, -1); return { k, from, to: t, pfrom: pm, pto, label: 'this month', days: n + 1 }; }
   if (k === 'fy') return { k, from: d.fy_start, to: t, pfrom: null, pto: null, label: 'this FY', days: daysBetween(d.fy_start, t) + 1 };
   const n = Number(k) || 30, from = addD(t, -(n - 1));
@@ -225,10 +226,12 @@ function home() {
     <div class="card"><h3>Today <span>${dmy(t)}</span></h3><div class="kpis">
       ${kpi('Sales', `<a href="#/sales?day=${t}">${short(sum(tb))}</a>`, `${tb.length} bills · ${pctTag(pct(sum(tb), salesLw))} vs last ${new Date(lw).toLocaleDateString('en-IN', { weekday: 'short' })}`, 'g')}
       ${kpi('Collection', `<a href="#/collect?s=today">${short(sum(tr))}</a>`, `cash ${short(modes.cash)} · bank ${short(modes.bank)} · UPI ${short(modes.upi)}`, 'g')}
+      ${hasProfit() ? kpi('Profit', `<a href="#/profit?tab=bill&day=${t}">${pfTxt(pf(tb.filter(b => b.s !== undefined)))}</a>`, 'today, before GST', 'g') : ''}
       ${kpi('Purchases', short(sum(d.purchases.filter(x => x.d === t))), `yesterday's sales ${short(I.daySales.get(yd) || 0)}`)}${kpi('Payments made', short(sum(d.payments.filter(x => x.d === t))), `collection last ${new Date(lw).toLocaleDateString('en-IN', { weekday: 'short' })} ${short(recLw)}`)}</div></div>
     ${ins.length ? `<div class="card"><h3>Insights</h3><ul class="ins">${ins.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''}
     <div class="card"><h3>This month <span>${pctTag(pct(mtd, lmtd))} vs last month (same dates)</span></h3><div class="kpis">
       ${kpi('Sales so far', short(mtd), `last month same dates ${short(lmtd)}`, 'g')}${kpi('Projected month end', short(proj), `at ${short(M.days ? mtd / M.days : 0)} a day`)}
+      ${hasProfit() ? kpi('Profit this month', `<a href="#/profit?tab=day">${pfTxt(pf(d.bills.filter(b => b.d >= M.from && b.s !== undefined)))}</a>`, 'sale value − purchase cost', 'g') : ''}
       ${kpi('Collected', short(mcol), mtd ? `${Math.round(mcol / mtd * 100)}% of sales` : '', mtd && mcol / mtd < 0.7 ? 'a' : 'g')}${kpi('This FY', short(sum(d.bills)), `collected ${short(sum(d.receipts))}`)}</div>
       <h4>Daily sales, last 30 days</h4>${bars(days)}</div>
     <div class="card"><h3>Product sales</h3>${prodHtml}</div>
@@ -243,6 +246,51 @@ function home() {
 }
 const prodRow = (x, extra = '') => `<a class="row" href="${x.id ? '#/product/' + x.id : '#/sales?tab=products'}"><span class="m"><b>${esc(x.name)}</b><small>${num(x.q)}${x.f ? ' + ' + num(x.f) + ' free' : ''} · ${x.nb} bills · ${x.np} parties ${mgTxt(x)}</small></span><span class="r">${short(x.a)}<div class="small">${extra}</div></span></a>`;
 // customers who bought regularly (3+ bills in the 90 days before) but nothing in the last 30 days
+// ───────────── profit (the ERP's figure per bill: s = sale value before GST, c = purchase cost of the batches sold) ─────────────
+const hasProfit = () => S.data.bills.some(b => b.s !== undefined);
+const pf = list => { const sale = sum(list, b => b.s || 0), cost = sum(list, b => b.c || 0); return { sale, cost, profit: sale - cost, pct: sale ? (sale - cost) / sale * 100 : null, n: list.length }; };
+const pfTxt = x => `<b class="${x.profit < 0 ? 'red' : 'green'}">${short(x.profit)}</b>${x.pct !== null ? ` <span class="muted small">${x.pct.toFixed(1)}%</span>` : ''}`;
+function profit(q) {
+  const d = S.data, tab = q.tab || 'day';
+  const T = [['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise']];
+  if (!hasProfit()) { frame('Profit', NOLINES, '#/more'); return; }
+  const withP = d.bills.filter(b => b.s !== undefined);
+  const note = '<div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted. The same figure as the ERP\'s profit reports.</div>';
+  if (tab === 'bill') {
+    let day = q.day || d.today;
+    if (!q.day && !withP.some(b => b.d === day)) day = [...new Set(withP.map(b => b.d))].sort().pop() || day;
+    const rows = withP.filter(b => b.d === day).map(b => ({ ...b, x: pf([b]) }));
+    const so = q.sort || 'low';
+    rows.sort(so === 'high' ? (a, b) => b.x.profit - a.x.profit : so === 'pct' ? (a, b) => (a.x.pct ?? 0) - (b.x.pct ?? 0) : (a, b) => a.x.profit - b.x.profit);
+    const tot = pf(rows);
+    frame('Profit', `${tabsHtml(T, tab)}${dayPicker('#/profit', day, '&tab=bill&sort=' + so)}
+      <div class="kpis" style="margin-bottom:8px">${kpi('Profit', pfTxt(tot), `${rows.length} bills`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Cost', short(tot.cost))}${kpi('Loss bills', num(rows.filter(r => r.x.profit < 0).length), '', 'r')}</div>
+      <div class="chips">${[['low', 'Lowest profit first'], ['high', 'Highest profit first'], ['pct', 'Lowest %']].map(([k, l]) => `<a class="chip ${so === k ? 'on' : ''}" href="#/profit?tab=bill&day=${day}&sort=${k}">${l}</a>`).join('')}</div>
+      <div class="card"><div class="list">${rows.map(b => { const p = S.idx.p.get(b.p); return `<a class="row" href="#/sales?day=${b.d}&q=${encodeURIComponent(b.n)}"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · sale ${short(b.s)} · cost ${short(b.c)}</small></span><span class="r">${pfTxt(b.x)}</span></a>`; }).join('') || '<div class="muted">No bills with products on this day</div>'}</div></div>${note}`, '#/more');
+    wireTabs('#/profit');
+    $('[data-day]').onchange = e => { location.hash = `#/profit?tab=bill&day=${e.target.value}&sort=${so}`; };
+    return;
+  }
+  if (tab === 'day') {
+    const P = span(q.s || 'month', q.m);
+    const days = [...withP.filter(b => b.d >= P.from && b.d <= P.to).reduce((m, b) => m.set(b.d, (m.get(b.d) || []).concat(b)), new Map())].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([dd, l]) => ({ d: dd, x: pf(l) }));
+    const tot = pf(withP.filter(b => b.d >= P.from && b.d <= P.to));
+    frame('Profit', `${tabsHtml(T, tab)}${spanChips('#/profit?tab=day', P.k)}
+      <div class="kpis" style="margin-bottom:8px">${kpi('Profit', pfTxt(tot), `${tot.n} bills · ${P.label}`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Average a day', short(days.length ? tot.profit / days.length : 0), `${days.length} billing days`)}${kpi('Best day', days.length ? short(Math.max(...days.map(x => x.x.profit))) : '—')}</div>
+      ${days.length > 1 ? `<div class="card"><h3>Profit by day</h3>${bars([...days].reverse().map(x => ({ label: x.d.slice(8), v: Math.max(0, x.x.profit) })))}</div>` : ''}
+      <div class="card"><div class="list">${days.map(x => `<a class="row" href="#/profit?tab=bill&day=${x.d}"><span class="m"><b>${new Date(x.d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })}</b><small>${x.x.n} bills · sale ${short(x.x.sale)}</small></span><span class="r">${pfTxt(x.x)}</span></a>`).join('') || '<div class="muted">No bills</div>'}</div></div>${note}`, '#/more');
+    return wireTabs('#/profit', `&s=${P.k}`);
+  }
+  const months = [...withP.reduce((m, b) => m.set(b.d.slice(0, 7), (m.get(b.d.slice(0, 7)) || []).concat(b)), new Map())].sort().map(([k, l]) => ({ k, x: pf(l) }));
+  const tot = pf(withP);
+  frame('Profit', `${tabsHtml(T, tab)}
+    <div class="kpis" style="margin-bottom:8px">${kpi('Profit this FY', pfTxt(tot), `${tot.n} bills`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}</div>
+    ${months.length ? `<div class="card"><h3>Profit by month</h3>${bars(months.map(m => ({ label: m.k.slice(5), v: Math.max(0, m.x.profit) })))}</div>` : ''}
+    <div class="card"><div class="tw"><table><thead><tr><th>Month</th><th class="n">Bills</th><th class="n">Sale</th><th class="n">Cost</th><th class="n">Profit</th><th class="n">%</th></tr></thead>
+      <tbody>${months.map(m => `<tr><td><a href="#/profit?tab=day&s=custom&m=${m.k}">${new Date(m.k + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</a></td><td class="n">${m.x.n}</td><td class="n">${short(m.x.sale)}</td><td class="n">${short(m.x.cost)}</td><td class="n ${m.x.profit < 0 ? 'red' : ''}">${short(m.x.profit)}</td><td class="n">${m.x.pct === null ? '' : m.x.pct.toFixed(1)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>FY</td><td class="n">${tot.n}</td><td class="n">${short(tot.sale)}</td><td class="n">${short(tot.cost)}</td><td class="n">${short(tot.profit)}</td><td class="n">${tot.pct === null ? '' : tot.pct.toFixed(1)}</td></tr></tfoot></table></div></div>${note}`, '#/more');
+  wireTabs('#/profit');
+}
 function stoppedBuying() {
   const d = S.data, t = d.today, c30 = addD(t, -29), c120 = addD(t, -119);
   const recent = new Set(), before = new Map();
@@ -493,7 +541,7 @@ function product(id) {
 const CSPANS = [['today', 'Today'], ['7', '7 days'], ['30', '30 days'], ['month', 'This month'], ['fy', 'This FY']];
 function collect(q) {
   const d = S.data, I = S.idx, tab = q.tab || 'day';
-  const T = [['day', 'Day-wise'], ['parties', 'By party'], ['follow', 'Follow-up']];
+  const T = [['day', 'Day-wise'], ['parties', 'By party'], ['follow', 'Follow-up'], ...(d.track_cash ? [['track', 'Track cash']] : [])];
   const k = q.s || (tab === 'parties' ? '30' : 'today');
   const P = k === 'today' ? { k, from: d.today, to: d.today, label: 'today' } : span(k);
   const chips = `<div class="chips">${CSPANS.map(([x, l]) => `<a class="chip ${k === x ? 'on' : ''}" href="#/collect?tab=${tab}&s=${x}">${l}</a>`).join('')}</div>`;
@@ -518,6 +566,16 @@ function collect(q) {
     wireTabs('#/collect', `&s=${k}`);
     more($('[data-list]'), rows, x => `<a class="row" href="#/party/${x.p.id}?tab=rec"><span class="m"><b>${esc(x.p.name)}</b><small>${x.n} receipts · last ${dmy(x.last)} · bought ${short(x.s)}${x.p.pc ? ` · <span class="tag ${x.p.pc === 'Risky' ? 'r' : x.p.pc === 'Slow' ? 'a' : 'g'}">${esc(x.p.pc)}</span>` : ''}</small></span><span class="r"><b>${short(x.a)}</b><div class="small ${x.p.due > 0.5 ? 'red' : 'muted'}">due ${short(x.p.due)}</div></span></a>`);
     return;
+  }
+  if (tab === 'track') {
+    // cash brought in by a track as one amount (entered in the ERP); FAWin's party-wise cash receipts are allotted to it
+    const rows = d.track_cash || [];
+    const sus = sum(rows.filter(c => c.st !== 'cancelled'), c => c.sus);
+    const ST = { matched: ['g', '✔ matched'], short: ['a', 'short'], over: ['r', 'over'], waiting: ['', 'waiting for FAWin'] };
+    frame('Collection', `${tabsHtml(T, tab)}<div class="kpis" style="margin-bottom:8px">${kpi('Still in suspense', short(sus), 'cash received, not yet found in FAWin receipts', Math.abs(sus) > 1 ? 'r' : 'g')}${kpi('Collections (60 days)', num(rows.length), `${rows.filter(c => c.st !== 'matched').length} not matched`)}</div>
+      <div class="card"><div class="list">${rows.map(c => `<div class="row"><span class="m"><b>${esc(c.t)}</b><small>${dmy(c.d)}${c.by ? ' · ' + esc(c.by) : ''} · ${short(c.a)} received · ${short(c.got)} in ${c.n} FAWin receipts</small></span><span class="r"><span class="tag ${ST[c.st]?.[0] || ''}">${ST[c.st]?.[1] || esc(c.st)}</span><div class="small ${Math.abs(c.sus) > 1 ? 'red' : 'muted'}">${Math.abs(c.sus) > 1 ? (c.sus > 0 ? short(c.sus) + ' to find' : short(-c.sus) + ' over') : ''}</div></span></div>`).join('') || '<div class="muted">No track cash collections in the last 60 days</div>'}</div></div>
+      <div class="muted small" style="margin:6px 2px">Entered in the ERP (Cash & bank → Track cash). Party receipts of the track's parties entered in FAWin within 2 days are matched to it after each sync.</div>`, '#/collect');
+    return wireTabs('#/collect');
   }
   // follow-up: parties with dues who have not paid for a while
   const gap = Number(q.gap || 30);
@@ -757,7 +815,7 @@ function reports() {
     <div class="card"><h3>Sales by FAWin user (FY)</h3>${Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><span class="m">${esc(k)}</span><span class="r">${short(v)}</span></div>`).join('')}</div>`, '#/more');
 }
 function moreMenu() {
-  frame('More', `<div class="card menu">${[['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
+  frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (bill / day / month)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
 }
 async function archive(q) {
   frame('Older reports', `<div class="filters"><input type="date" data-from value="${esc(q.from || '')}"><input type="date" data-to value="${esc(q.to || '')}"><select data-k><option value="">All</option><option value="daily" ${q.k === 'daily' ? 'selected' : ''}>Daily reports (8 PM)</option></select><button class="btn sm" data-go>Search Gmail</button></div>
@@ -855,7 +913,7 @@ function route() {
   if (m) return party(m[1], q);
   const mp = path.match(/^\/product\/(\d+)$/);
   if (mp) return product(mp[1], q);
-  ({ '/home': home, '/parties': parties, '/due': due, '/tracks': tracks, '/sales': sales, '/receipts': collect, '/collect': collect, '/order': order, '/purchases': purchases, '/stock': stock, '/edits': edits, '/reports': reports, '/more': moreMenu, '/archive': archive }[path] || home)(q);
+  ({ '/home': home, '/parties': parties, '/due': due, '/tracks': tracks, '/sales': sales, '/receipts': collect, '/collect': collect, '/order': order, '/profit': profit, '/purchases': purchases, '/stock': stock, '/edits': edits, '/reports': reports, '/more': moreMenu, '/archive': archive }[path] || home)(q);
 }
 async function start() {
   const file = ls.get(LS.file);
