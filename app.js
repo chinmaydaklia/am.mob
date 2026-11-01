@@ -189,7 +189,7 @@ function home() {
   const proj = M.days ? mtd / M.days * dim : 0;
   const recv = sum(d.open.filter(o => o.k === 's'), o => o.b), pay = sum(d.open.filter(o => o.k === 'p'), o => o.b);
   const over90 = sum(d.open.filter(o => o.k === 's' && o.age > 90), o => o.b);
-  const expd = d.expiry.filter(x => x.dl < 0), near = d.expiry.filter(x => x.dl >= 0 && x.dl <= 90);
+  const expd = d.expiry.filter(x => x.dl < 0 && x.dl >= -365), oldExp = d.expiry.filter(x => x.dl < -365), near = d.expiry.filter(x => x.dl >= 0 && x.dl <= 90);
   const edToday = d.edits.filter(e => String(e.at).startsWith(t));
   const ck = d.fawin?.check, runs = d.fawin?.runs_today || [];
   // last 30 days of sales
@@ -237,7 +237,7 @@ function home() {
     <div class="card"><h3>Tracks <a href="#/tracks">all →</a></h3>${trackTable(true)}</div>
     <div class="card"><h3>Alerts</h3>
       <a class="row" href="#/edits"><span class="m"><b>Changes in FAWin today</b><small>edited or deleted bills, with who did it</small></span><span class="r ${edToday.length ? 'amber' : ''}">${edToday.length}</span></a>
-      <a class="row" href="#/stock?tab=expiry"><span class="m"><b>Expired stock</b><small>${expd.length} batches</small></span><span class="r red">${short(sum(expd, x => x.v))}</span></a>
+      <a class="row" href="#/stock?tab=expiry"><span class="m"><b>Expired in the last year</b><small>${expd.length} batches${oldExp.length ? ` · ${oldExp.length} older batches (probably leftovers) not counted` : ''}</small></span><span class="r red">${short(sum(expd, x => x.v))}</span></a>
       <a class="row" href="#/stock?tab=expiry"><span class="m"><b>Expiring within 90 days</b><small>${near.length} batches</small></span><span class="r amber">${short(sum(near, x => x.v))}</span></a></div>
     <div class="card"><h3>Sync today</h3>${runs.length ? runs.map(r => `<div class="row"><span class="m">${esc(String(r.started_at).slice(11, 16))} ${esc(r.trigger)}</span><span class="r ${r.status === 'ok' ? 'green' : 'red'}">${r.status === 'ok' ? '✓ OK' : esc(r.status)}</span></div>`).join('') : '<div class="muted">No sync yet today</div>'}</div>`, '#/home');
 }
@@ -481,6 +481,9 @@ function product(id) {
         ${kpi('Last purchase', p.lr ? money(p.lr) : '—', sup ? `${esc(sup.name)}${p.ld ? ' · ' + dmy(p.ld) : ''}${p.lf ? ' · scheme ' + esc(p.lf) : ''}` : 'no purchase in the ERP data')}
         ${kpi('Net sale per unit', avgRate ? money(avgRate) : '—', 'after discount & free goods, before GST')}${kpi('Landing cost per unit', uc ? money(uc) : '—', uc && avgRate ? `margin ~${((avgRate - uc) / avgRate * 100).toFixed(1)}%${p.lc ? ' · free goods received counted' : ''}` : '', uc && avgRate < uc ? 'r' : '')}
         ${kpi('MRP', p.mrp ? money(p.mrp) : '—')}</div>
+      ${(() => { const set = poSet(), r = poRow(p, set), ss = saleScheme(p.i); return `<div style="margin-top:8px">${p.lf ? `<span class="tag g">scheme received ${esc(p.lf)}</span> ` : ''}${ss ? `<span class="tag b">scheme given ${esc(ss)}</span> ` : ''}<span class="tag">regular sale ~${num(Math.round(r.monthly))}/month</span>${r.need ? ` <span class="tag a">suggested order ${r.need}</span>` : ''}</div>
+        ${r.D.odd.length ? `<div class="alert" style="margin-top:6px">⚠ One-off big order${r.D.odd.length > 1 ? 's' : ''} in the last ${set.basis} days, left out of the regular sale: ${oddTxt(r).replace('one-off: ', '')}</div>` : ''}
+        ${r.bigBuy ? `<div class="alert" style="margin-top:6px">⚠ Last purchase was ${num(r.bigBuy)} on ${dmy(p.ld)} — about ${Math.round(r.bigBuy / Math.max(r.monthly, 0.1))} months of regular sale. Probably bought for a party's order.</div>` : ''}`; })()}
       <div class="actions" style="margin-top:8px"><a class="btn" href="#/order?add=${p.i}">🛒 Add to purchase order</a>${sup ? `<a class="btn ghost" href="#/party/${sup.id}?tab=pur">Supplier →</a>` : ''}</div></div>
     ${months.length ? `<div class="card"><h3>Quantity sold by month</h3>${bars(months, num)}</div>` : ''}
     <div class="card"><h3><span>Top buyers (90 days)</span><span>${buyers.length} parties</span></h3>${buyers.slice(0, 15).map(x => `<a class="row" href="#/party/${x.p.id}?tab=bills"><span class="m"><b>${esc(x.p.name)}</b><small>${num(x.q)} qty · ${x.n} bills</small></span><span class="r">${short(x.a)}</span></a>`).join('') || '<div class="muted">No sales in 90 days</div>'}</div>
@@ -536,100 +539,138 @@ function collect(q) {
   $('[data-t]').onchange = draw; draw();
 }
 
-// ───────────── purchase order ─────────────
-// Suggested quantity = (average daily sale over the basis period × days of stock wanted) − stock now. Sales count
-// free goods too (they also leave the shelf). Quantities typed here are kept on this phone until the order is sent.
+// ───────────── purchase order (company-wise) ─────────────
+// Suggested quantity = regular daily sale over the basis period × days of stock wanted − stock now.
+// "Regular" leaves out one-off big orders: a bill with at least 4 times the usual quantity of that product that is
+// also over a third of everything sold of it in the period (a party asked for a big lot once). Free goods count as
+// sold (they leave the shelf). Quantities are kept on this phone until the order is marked sent.
 const PO = { cart: 'am_po_cart', set: 'am_po_set', sent: 'am_po_sent' };
-const poSet = () => ({ basis: 90, cover: 30, by: 'supplier', ...JSON.parse(ls.get(PO.set) || '{}') });
+const poSet = () => ({ basis: 90, cover: 30, oneoff: false, scheme: true, ...JSON.parse(ls.get(PO.set) || '{}') });
 const poCart = () => JSON.parse(ls.get(PO.cart) || '{}');
-function poRows(set) {
-  const d = S.data, from = addD(d.today, -(set.basis - 1)), sold = new Map();
-  for (const l of d.lines || []) if (l[3] && l[1] >= from) sold.set(l[3], (sold.get(l[3]) || 0) + l[4] + l[5]);
-  const cart = poCart();
-  return (d.prod || []).map(p => {
-    const s = sold.get(p.i) || 0, avg = s / set.basis, need = Math.max(0, Math.ceil(avg * set.cover - Math.max(p.q, 0)));
-    const qty = cart[p.i] !== undefined ? cart[p.i] : need;
-    const grp = set.by === 'company' ? p.co || '(no company)' : (p.ls && S.idx.p.get(p.ls)?.name) || '(no purchase yet)';
-    return { p, s, avg, need, qty, edited: cart[p.i] !== undefined, cover: avg ? p.q / avg : null, grp, sup: p.ls ? S.idx.p.get(p.ls) : null };
-  });
+function demand(pid, from) {
+  const per = new Map();
+  for (const l of S.idx.lByProd.get(pid) || []) if (l[1] >= from) { const x = per.get(l[0]) || per.set(l[0], { d: l[1], p: l[2], u: 0 }).get(l[0]); x.u += l[4] + l[5]; }
+  const bills = [...per.values()], T = sum(bills, b => b.u);
+  if (!bills.length) return { T: 0, reg: 0, odd: [], n: 0 };
+  const us = bills.map(b => b.u).sort((a, b) => a - b), med = bills.length === 2 ? us[0] : us[Math.floor(us.length / 2)];
+  const odd = bills.length === 1 ? (T >= 10 ? bills : []) : bills.filter(b => b.u >= 4 * Math.max(med, 1) && b.u >= T / 3 && b.u >= 10);
+  return { T, reg: T - sum(odd, b => b.u), odd, n: bills.length };
 }
+// the scheme usually given on sales of a product (most common qty+free in 90 days)
+function saleScheme(pid) {
+  const per = new Map(), from = addD(S.data.today, -89);
+  for (const l of S.idx.lByProd.get(pid) || []) if (l[1] >= from) { const x = per.get(l[0]) || per.set(l[0], [0, 0]).get(l[0]); x[0] += l[4]; x[1] += l[5]; }
+  const cnt = new Map(); for (const [q, f] of per.values()) if (f > 0 && q > 0) { const k = `${num(q)}+${num(f)}`; cnt.set(k, (cnt.get(k) || 0) + 1); }
+  return [...cnt].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
+function poRow(p, set, cart = poCart()) {
+  const D = demand(p.i, addD(S.data.today, -(set.basis - 1)));
+  const used = set.oneoff ? D.T : D.reg, avg = used / set.basis, regAvg = D.reg / set.basis;
+  const need = Math.max(0, Math.ceil(avg * set.cover - Math.max(p.q, 0)));
+  // stock that came from a big one-off purchase: the last purchase covers 6 months or more of regular sale
+  const bigBuy = p.lq && p.lq >= 30 && p.lq >= 6 * Math.max(regAvg * 30, 1) ? p.lq : 0;
+  return { p, D, avg, need, qty: cart[p.i] || 0, cover: avg ? p.q / avg : null, bigBuy, monthly: regAvg * 30 };
+}
+const oddTxt = r => (r.D.odd.length ? `one-off: ${r.D.odd.map(b => `${num(b.u)} to ${esc(S.idx.p.get(b.p)?.name || 'a party')} (${dmy(b.d)})`).join(', ')}` : '');
 function order(q) {
   const d = S.data, tab = q.tab || 'make';
   if (!hasLines()) return frame('Purchase order', NOLINES, '#/order');
-  if (q.add) { const c = poCart(), r = poRows(poSet()).find(x => x.p.i === Number(q.add)); c[q.add] = Math.max(r?.need || 0, 1); ls.set(PO.cart, JSON.stringify(c)); toast('Added to the order'); location.replace(`#/order?g=${encodeURIComponent(r?.grp || '')}`); return; }
-  const set = poSet();
+  if (q.add) { const pr = S.idx.prod.get(Number(q.add)); const c = poCart(); if (pr) { const r = poRow(pr, poSet(), c); c[pr.i] = c[pr.i] || Math.max(r.need, 1); ls.set(PO.cart, JSON.stringify(c)); toast('Added to the order'); } location.replace(`#/order?co=${encodeURIComponent(pr?.co || '(no company)')}`); return; }
   if (tab === 'sent') return sentOrders();
-  const rows = poRows(set);
-  if (q.g !== undefined) return orderSheet(q.g, rows, set);
-  const groups = [...rows.filter(r => r.qty > 0).reduce((m, r) => m.set(r.grp, (m.get(r.grp) || []).concat(r)), new Map())]
-    .map(([g, l]) => ({ g, l, v: sum(l, r => r.qty * (r.p.lr || 0)), urgent: l.filter(r => r.p.q <= 0 && r.s > 0).length, none: g.startsWith('(no ') })).sort((a, b) => a.none - b.none || b.urgent - a.urgent || b.v - a.v);
-  frame('Purchase order', `${tabsHtml([['make', 'Make orders'], ['sent', 'Sent orders']], tab)}
+  const set = poSet();
+  if (q.co !== undefined) return companyOrder(q.co, set, q);
+  const cart = poCart();
+  const byCo = new Map();
+  for (const p of d.prod || []) { const k = p.co || '(no company)'; (byCo.get(k) || byCo.set(k, []).get(k)).push(p); }
+  const cos = [...byCo].map(([co, list]) => {
+    const rows = list.map(p => poRow(p, set, cart));
+    return { co, n: list.length, out: rows.filter(r => r.p.q <= 0 && r.D.reg > 0).length, sug: rows.filter(r => r.need > 0), draft: rows.filter(r => r.qty > 0), odd: rows.filter(r => r.D.odd.length).length, big: rows.filter(r => r.bigBuy).length };
+  }).map(c => ({ ...c, sugV: sum(c.sug, r => r.need * (r.p.lr || 0)), draftV: sum(c.draft, r => r.qty * (r.p.lr || 0)) }))
+    .sort((a, b) => b.draft.length - a.draft.length || b.out - a.out || b.sugV - a.sugV);
+  frame('Purchase order', `${tabsHtml([['make', 'Company-wise'], ['sent', 'Sent orders']], tab)}
     <div class="card"><div class="filters">
       <select data-k="basis">${[60, 90].map(x => `<option value="${x}" ${set.basis === x ? 'selected' : ''}>Sales of last ${x} days</option>`).join('')}</select>
-      <select data-k="cover">${[15, 30, 45, 60].map(x => `<option value="${x}" ${set.cover === x ? 'selected' : ''}>Keep ${x} days of stock</option>`).join('')}</select>
-      <select data-k="by"><option value="supplier" ${set.by === 'supplier' ? 'selected' : ''}>By supplier (last bought from)</option><option value="company" ${set.by === 'company' ? 'selected' : ''}>By company</option></select></div>
-      <div class="muted small">Suggested = average daily sale (incl. free) × days of stock − stock now. Tap a ${set.by} to check and change quantities, then send the order.</div></div>
-    <div class="filters"><input data-q placeholder="Find ${set.by} or product"></div>
+      <select data-k="cover">${[15, 30, 45, 60].map(x => `<option value="${x}" ${set.cover === x ? 'selected' : ''}>Keep ${x} days of stock</option>`).join('')}</select></div>
+      <label class="muted small"><input type="checkbox" data-k="oneoff" ${set.oneoff ? 'checked' : ''}> Count one-off big orders as regular sale</label>
+      <div class="muted small" style="margin-top:4px">Suggested = regular daily sale × days of stock − stock now. One-off big orders (a party taking 4× the usual quantity at once) are left out, and shown on the product.</div></div>
+    <div class="filters"><input data-q placeholder="Find company"><select data-f><option value="">All companies</option><option value="need">Needing an order</option><option value="draft">With a draft</option></select></div>
     <div class="card"><h3 data-h></h3><div class="list" data-list></div></div>`, '#/order');
   wireTabs('#/order');
-  document.querySelectorAll('[data-k]').forEach(el => (el.onchange = () => { const x = poSet(); x[el.dataset.k] = el.dataset.k === 'by' ? el.value : Number(el.value); ls.set(PO.set, JSON.stringify(x)); order(q); }));
+  document.querySelectorAll('[data-k]').forEach(el => (el.onchange = () => { const x = poSet(); x[el.dataset.k] = el.type === 'checkbox' ? el.checked : Number(el.value); ls.set(PO.set, JSON.stringify(x)); order(q); }));
+  const draw = () => {
+    const s = $('[data-q]').value.trim().toLowerCase(), f = $('[data-f]').value;
+    const list = cos.filter(c => (!s || c.co.toLowerCase().includes(s)) && (!f || (f === 'need' ? c.sug.length : c.draft.length)));
+    $('[data-h]').innerHTML = `<span>${list.length} companies</span><span>${cos.filter(c => c.draft.length).length} drafts</span>`;
+    more($('[data-list]'), list, c => `<a class="row" href="#/order?co=${encodeURIComponent(c.co)}"><span class="m"><b>${esc(c.co)}</b><small>${c.n} products${c.out ? ` · <span class="red">${c.out} out of stock</span>` : ''}${c.sug.length ? ` · ${c.sug.length} to order` : ''}${c.odd ? ` · ${c.odd} one-off sales` : ''}${c.big ? ` · ${c.big} big buys` : ''}</small></span>
+      <span class="r">${c.draft.length ? `<span class="tag b">draft ${c.draft.length}</span><div class="small">~${short(c.draftV)}</div>` : c.sug.length ? `~${short(c.sugV)}` : ''}</span></a>`);
+  };
+  $('[data-q]').oninput = draw; $('[data-f]').onchange = draw; draw();
+}
+function companyOrder(co, set, q) {
+  const d = S.data, cart = poCart();
+  const rows = (d.prod || []).filter(p => (p.co || '(no company)') === co).map(p => ({ ...poRow(p, set, cart), ss: saleScheme(p.i) }))
+    .sort((a, b) => (b.p.q <= 0 && b.D.reg > 0) - (a.p.q <= 0 && a.D.reg > 0) || b.need - a.need || b.D.reg - a.D.reg || a.p.n.localeCompare(b.p.n));
+  // suppliers this company's goods came from (most products first)
+  const sup = [...rows.reduce((m, r) => (r.p.ls ? m.set(r.p.ls, (m.get(r.p.ls) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]).map(([id]) => S.idx.p.get(id)).filter(Boolean);
+  const view = q.v || 'all';
+  frame(co, `<div class="card"><div class="big">${esc(co)}</div><div class="muted small">${rows.length} products · sales of last ${set.basis} days · keep ${set.cover} days of stock${set.oneoff ? '' : ' · one-off orders left out'}</div>
+      <div class="actions" style="margin-top:8px"><button class="btn" data-draft>✨ Draft order for me</button><button class="btn ghost" data-clear>Clear quantities</button></div>
+      <div class="muted small" style="margin-top:4px">"Draft order for me" fills the suggested quantity in every empty box; you can change any of them. Or type quantities yourself.</div></div>
+    <div class="chips">${[['all', 'All products'], ['need', 'To order'], ['out', 'Out of stock'], ['odd', 'One-off / big buys'], ['dead', 'Not selling'], ['draft', 'In this order']].map(([k, l]) => `<a class="chip ${view === k ? 'on' : ''}" href="#/order?co=${encodeURIComponent(co)}&v=${k}">${l}</a>`).join('')}</div>
+    <div class="filters"><input data-q placeholder="Find product"></div>
+    <div class="card"><div class="polist" data-rows></div></div>
+    <div class="card"><h3><span data-tot></span><span data-val></span></h3>
+      <div class="filters"><select data-to>${sup.map(x => `<option value="${x.id}">${esc(x.name)}${x.wa ? '' : ' (no WhatsApp no.)'}</option>`).join('')}<option value="">Choose the contact in WhatsApp</option></select></div>
+      <label class="muted small" style="display:block;margin-bottom:6px"><input type="checkbox" data-sch ${set.scheme ? 'checked' : ''}> Mention the last scheme received in the message</label>
+      <textarea data-msg rows="8"></textarea>
+      <div class="actions" style="margin-top:8px"><a class="btn wa" data-wa target="_blank" rel="noopener">📲 Send on WhatsApp</a><button class="btn ghost" data-copy>Copy</button><button class="btn green" data-done>Mark as sent</button></div>
+      <div class="muted small" style="margin-top:6px">"Mark as sent" keeps a copy under Sent orders and clears these quantities.</div></div>
+    <a class="btn ghost sm" href="#/order">◀ All companies</a>`, '#/order');
+  const val = r => cart[r.p.i] || 0;
+  const pick = { all: () => true, need: r => r.need > 0 || val(r) > 0, out: r => r.p.q <= 0, odd: r => r.D.odd.length || r.bigBuy, dead: r => r.p.q > 0 && !r.D.T, draft: r => val(r) > 0 }[view] || (() => true);
   const draw = () => {
     const s = $('[data-q]').value.trim().toLowerCase();
-    const list = groups.filter(g => !s || g.g.toLowerCase().includes(s) || g.l.some(r => r.p.n.toLowerCase().includes(s)));
-    $('[data-h]').innerHTML = `<span>${list.length} ${set.by === 'company' ? 'companies' : 'suppliers'} · ${sum(list, g => g.l.length)} items</span><span>~${short(sum(list, g => g.v))}</span>`;
-    more($('[data-list]'), list, g => `<a class="row" href="#/order?g=${encodeURIComponent(g.g)}"><span class="m"><b>${esc(g.g)}</b><small>${g.l.length} items${g.urgent ? ` · <span class="red">${g.urgent} out of stock</span>` : ''}${g.l.some(r => r.edited) ? ' · <span class="tag b">edited</span>' : ''}</small></span><span class="r">~${short(g.v)}</span></a>`);
-  };
-  $('[data-q]').oninput = draw; draw();
-}
-function orderSheet(g, rows, set) {
-  const all = rows.filter(r => r.grp === g).sort((a, b) => (a.p.q <= 0 && a.s > 0 ? 0 : 1) - (b.p.q <= 0 && b.s > 0 ? 0 : 1) || (a.cover ?? 1e9) - (b.cover ?? 1e9));
-  const sup = all.find(r => r.sup)?.sup;
-  frame(g, `<div class="card"><div class="big">${esc(g)}</div><div class="muted small">Sales of last ${set.basis} days · keep ${set.cover} days of stock${sup?.mobile ? ' · 📞 ' + esc(sup.mobile) : ''}</div>
-      <label class="muted small" style="display:block;margin-top:6px"><input type="checkbox" data-allitems> Show all ${all.length} items of this ${set.by} (not only suggested)</label></div>
-    <div class="card"><div class="tw"><table class="po"><thead><tr><th>Product</th><th class="n">Stock</th><th class="n">Sold</th><th class="n">Lasts</th><th class="n">Order</th></tr></thead><tbody data-rows></tbody>
-      <tfoot><tr><td colspan="4" data-tot></td><td class="n" data-val></td></tr></tfoot></table></div></div>
-    <div class="card"><h3>Order message</h3><textarea data-msg rows="8"></textarea>
-      <div class="actions" style="margin-top:8px"><a class="btn wa" data-wa target="_blank" rel="noopener">📲 Send on WhatsApp${sup?.wa ? '' : ' (choose contact)'}</a><button class="btn ghost" data-copy>Copy</button><button class="btn green" data-done>Mark as sent</button><button class="btn ghost" data-clear>Reset quantities</button></div>
-      <div class="muted small" style="margin-top:6px">"Mark as sent" keeps a copy under Sent orders and clears these quantities.</div></div>
-    <a class="btn ghost sm" href="#/order">◀ All ${set.by === 'company' ? 'companies' : 'suppliers'}</a>`, '#/order');
-  const cart = poCart();
-  const val = r => (cart[r.p.i] !== undefined ? cart[r.p.i] : r.need);
-  const draw = () => {
-    const showAll = $('[data-allitems]').checked;
-    const list = all.filter(r => showAll || val(r) > 0 || r.need > 0);
-    $('[data-rows]').innerHTML = list.map(r => `<tr class="${r.p.q <= 0 && r.s > 0 ? 'urgent' : ''}"><td><a href="#/product/${r.p.i}">${esc(r.p.n)}</a><div class="muted small">${esc(r.p.pk || '')}${r.p.lr ? ' · ' + money(r.p.lr) : ''}${r.p.lf ? ' · last ' + esc(r.p.lf) : ''}</div></td>
-      <td class="n ${r.p.q <= 0 ? 'red' : ''}">${num(r.p.q)}</td><td class="n">${num(r.s)}</td><td class="n">${r.cover === null ? '—' : Math.round(r.cover) + 'd'}</td>
-      <td class="n"><input class="qty" type="number" inputmode="numeric" min="0" data-id="${r.p.i}" value="${val(r) || ''}" placeholder="${r.need || 0}"></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing to order — tick "Show all items" to add more</td></tr>';
-    document.querySelectorAll('[data-id]').forEach(inp => (inp.oninput = () => { const c = poCart(); c[inp.dataset.id] = Math.max(0, Number(inp.value) || 0); ls.set(PO.cart, JSON.stringify(c)); cart[inp.dataset.id] = c[inp.dataset.id]; totals(); }));
+    const list = rows.filter(r => pick(r) && (!s || r.p.n.toLowerCase().includes(s)));
+    $('[data-rows]').innerHTML = list.map(r => `<div class="porow ${r.p.q <= 0 && r.D.reg > 0 ? 'urgent' : ''}">
+      <div class="m"><a href="#/product/${r.p.i}"><b>${esc(r.p.n)}</b></a> <span class="muted small">${esc(r.p.pk || '')}</span>
+        <small>Stock <b class="${r.p.q <= 0 ? 'red' : ''}">${num(r.p.q)}</b> · sold ${num(r.D.T)} in ${set.basis} d (~${num(Math.round(r.monthly))}/month regular) · ${r.cover === null ? 'no regular sale' : `lasts ${Math.round(r.cover)} d`}${r.p.lr ? ` · ${money(r.p.lr)}` : ''}</small>
+        ${r.D.odd.length ? `<small class="amber">⚠ ${oddTxt(r)}</small>` : ''}${r.bigBuy ? `<small class="amber">⚠ last purchase ${num(r.bigBuy)} (${dmy(r.p.ld)}) ≈ ${Math.round(r.bigBuy / Math.max(r.monthly, 0.1))} months of regular sale — bought for a party?</small>` : ''}</div>
+      <div class="sch">${r.p.lf ? `<span class="tag g" title="scheme received on the last purchase">get ${esc(r.p.lf)}</span>` : ''}${r.ss ? `<span class="tag b" title="scheme usually given on sales">give ${esc(r.ss)}</span>` : ''}</div>
+      <div class="q"><input class="qty" type="number" inputmode="numeric" min="0" data-id="${r.p.i}" value="${val(r) || ''}" placeholder="${r.need || ''}"><small>${r.need ? 'sugg. ' + r.need : ''}</small></div></div>`).join('') || '<div class="muted">No products here</div>';
+    document.querySelectorAll('[data-id]').forEach(inp => (inp.oninput = () => { const c = poCart(); const v = Math.max(0, Number(inp.value) || 0); if (v) c[inp.dataset.id] = v; else delete c[inp.dataset.id]; ls.set(PO.cart, JSON.stringify(c)); if (v) cart[inp.dataset.id] = v; else delete cart[inp.dataset.id]; totals(); }));
     totals();
   };
   const totals = () => {
-    const sel = all.filter(r => val(r) > 0);
-    $('[data-tot]').textContent = `${sel.length} items`;
+    const sel = rows.filter(r => val(r) > 0), to = sup.find(x => String(x.id) === $('[data-to]').value), withSch = $('[data-sch]').checked;
+    $('[data-tot]').textContent = `${sel.length} items in this order`;
     $('[data-val]').textContent = '~' + short(sum(sel, r => val(r) * (r.p.lr || 0)));
-    const msg = [`*Purchase Order — ${S.data.company || 'Arihant Medicos'}*`, `To: ${g}`, `Date: ${dmy(S.data.today)}`, '', ...sel.map((r, k) => `${k + 1}) ${r.p.n}${r.p.pk ? ' (' + r.p.pk + ')' : ''} — Qty *${num(val(r))}*`), '', `Total items: ${sel.length}`, 'Please send at the earliest and confirm availability / scheme.'].join('\n');
+    const msg = [`*Purchase Order — ${d.company || 'Arihant Medicos'}*`, `Company: ${co}`, ...(to ? [`To: ${to.name}`] : []), `Date: ${dmy(d.today)}`, '',
+      ...sel.map((r, k) => `${k + 1}) ${r.p.n}${r.p.pk ? ' (' + r.p.pk + ')' : ''} — Qty *${num(val(r))}*${withSch && r.p.lf ? ` (sch ${r.p.lf})` : ''}`), '', `Total items: ${sel.length}`, 'Please send at the earliest and confirm availability / scheme.'].join('\n');
     $('[data-msg]').value = msg;
-    $('[data-wa]').href = `https://wa.me/${sup?.wa || ''}?text=${encodeURIComponent(msg)}`;
+    $('[data-wa]').href = `https://wa.me/${to?.wa || ''}?text=${encodeURIComponent(msg)}`;
   };
-  $('[data-allitems]').onchange = draw;
+  $('[data-q]').oninput = draw; $('[data-to]').onchange = totals;
+  $('[data-sch]').onchange = () => { const x = poSet(); x.scheme = $('[data-sch]').checked; ls.set(PO.set, JSON.stringify(x)); totals(); };
+  $('[data-draft]').onclick = () => { const c = poCart(); let n = 0; for (const r of rows) if (r.need > 0 && !c[r.p.i]) { c[r.p.i] = r.need; cart[r.p.i] = r.need; n++; } ls.set(PO.cart, JSON.stringify(c)); toast(n ? `${n} products filled — check and change as needed` : 'Nothing more to suggest for this company'); draw(); };
+  $('[data-clear]').onclick = () => { const c = poCart(); for (const r of rows) { delete c[r.p.i]; delete cart[r.p.i]; } ls.set(PO.cart, JSON.stringify(c)); draw(); };
   $('[data-copy]').onclick = () => navigator.clipboard?.writeText($('[data-msg]').value).then(() => toast('Copied'), () => toast('Select the text and copy it'));
   $('[data-done]').onclick = () => {
-    const sel = all.filter(r => val(r) > 0);
-    if (!sel.length) return toast('No quantities to send');
+    const sel = rows.filter(r => val(r) > 0);
+    if (!sel.length) return toast('No quantities in this order');
+    const to = sup.find(x => String(x.id) === $('[data-to]').value);
     const sent = JSON.parse(ls.get(PO.sent) || '[]');
-    sent.unshift({ at: new Date().toISOString().slice(0, 16).replace('T', ' '), to: g, items: sel.map(r => [r.p.i, r.p.n, val(r), r.p.lr || 0]), msg: $('[data-msg]').value });
+    sent.unshift({ at: new Date().toISOString().slice(0, 16).replace('T', ' '), to: co + (to ? ' → ' + to.name : ''), wa: to?.wa || '', items: sel.map(r => [r.p.i, r.p.n, val(r), r.p.lr || 0]), msg: $('[data-msg]').value });
     ls.set(PO.sent, JSON.stringify(sent.slice(0, 200)));
-    const c = poCart(); for (const r of all) delete c[r.p.i]; ls.set(PO.cart, JSON.stringify(c));
+    const c = poCart(); for (const r of rows) delete c[r.p.i]; ls.set(PO.cart, JSON.stringify(c));
     toast('Saved under Sent orders'); location.hash = '#/order?tab=sent';
   };
-  $('[data-clear]').onclick = () => { const c = poCart(); for (const r of all) delete c[r.p.i]; ls.set(PO.cart, JSON.stringify(c)); for (const k of Object.keys(cart)) delete cart[k]; draw(); };
   draw();
 }
 function sentOrders() {
   const sent = JSON.parse(ls.get(PO.sent) || '[]');
-  frame('Purchase order', `${tabsHtml([['make', 'Make orders'], ['sent', 'Sent orders']], 'sent')}
+  frame('Purchase order', `${tabsHtml([['make', 'Company-wise'], ['sent', 'Sent orders']], 'sent')}
     <div class="card"><h3>${sent.length} orders kept on this phone</h3>${sent.map((o, k) => `<details class="bill"><summary class="row"><span class="m"><b>${esc(o.to)}</b><small>${esc(o.at)} · ${o.items.length} items</small></span><span class="r">~${short(sum(o.items, x => x[2] * x[3]))}</span></summary>
-      <pre class="msg">${esc(o.msg)}</pre><div class="actions" style="margin:6px 0"><a class="btn wa sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(o.msg)}">📲 Send again</a><button class="btn ghost sm" data-del="${k}">Delete</button></div></details>`).join('') || '<div class="muted">No orders sent yet</div>'}</div>`, '#/order');
+      <pre class="msg">${esc(o.msg)}</pre><div class="actions" style="margin:6px 0"><a class="btn wa sm" target="_blank" rel="noopener" href="https://wa.me/${o.wa || ''}?text=${encodeURIComponent(o.msg)}">📲 Send again</a><button class="btn ghost sm" data-del="${k}">Delete</button></div></details>`).join('') || '<div class="muted">No orders sent yet</div>'}</div>`, '#/order');
   wireTabs('#/order');
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = () => { const x = JSON.parse(ls.get(PO.sent) || '[]'); x.splice(Number(b.dataset.del), 1); ls.set(PO.sent, JSON.stringify(x)); sentOrders(); }));
 }
@@ -652,9 +693,14 @@ function stock(q) {
   wireTabs('#/stock');
   if (tab === 'expiry') {
     $('[data-k]').remove();
-    const rows = [...d.expiry].sort((a, b) => a.dl - b.dl);
+    // FAWin's stock keeps old batches it never cleared: an expiry more than a year ago is shown apart ("old leftovers")
+    const part = q.part || 'recent';
+    const all = [...d.expiry].sort((a, b) => b.dl - a.dl), old = all.filter(x => x.dl < -365), recent = all.filter(x => x.dl >= -365);
+    const rows = part === 'old' ? old : recent;
+    $('[data-f]').innerHTML = `<div class="chips"><a class="chip ${part === 'recent' ? 'on' : ''}" href="#/stock?tab=expiry&part=recent">Expiring / expired this year (${recent.length})</a><a class="chip ${part === 'old' ? 'on' : ''}" href="#/stock?tab=expiry&part=old">Expired over a year ago (${old.length})</a></div>
+      <div class="alert b">${part === 'old' ? 'These batches expired more than a year ago. Most are probably old batches FAWin never cleared from stock — check on the shelf, then write them off in FAWin.' : 'Check these on the shelf: return to the supplier before expiry, or move them out.'}</div>`;
     $('[data-h]').innerHTML = `<span>${rows.filter(x => x.dl < 0).length} expired · ${rows.filter(x => x.dl >= 0).length} expiring within 120 days</span><span>${short(sum(rows, x => x.v))}</span>`;
-    return more($('[data-list]'), rows, x => `<div class="row"><span class="m"><b>${esc(x.n)}</b><small>Batch ${esc(x.b || '')} · exp ${dmy(x.e)} · ${esc(x.s || '')}</small></span><span class="r"><span class="${x.dl < 0 ? 'red' : x.dl <= 30 ? 'amber' : ''}">${x.dl < 0 ? 'expired' : x.dl + ' d'}</span><div class="small">${num(x.q)} · ${short(x.v)}</div></span></div>`);
+    return more($('[data-list]'), part === 'old' ? rows : [...rows].sort((a, b) => a.dl - b.dl), x => `<div class="row"><span class="m"><b>${esc(x.n)}</b><small>Batch ${esc(x.b || '')} · exp ${dmy(x.e)} · ${esc(x.s || '')}</small></span><span class="r"><span class="${x.dl < 0 ? 'red' : x.dl <= 30 ? 'amber' : ''}">${x.dl < 0 ? 'expired' : x.dl + ' d'}</span><div class="small">${num(x.q)} · ${short(x.v)}</div></span></div>`);
   }
   if (!hasLines()) { $('[data-k]').remove(); $('[data-h]').textContent = `${d.stock.length} items in stock`; return more($('[data-list]'), d.stock, x => `<div class="row"><span class="m"><b>${esc(x.name)}</b><small>${esc([x.pack, x.co].filter(Boolean).join(' · '))}</small></span><span class="r"><b>${num(x.q)}</b></span></div>`); }
   // sold in the last 90 / 30 days per product
