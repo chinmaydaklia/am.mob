@@ -67,6 +67,23 @@ tfoot td { font-weight: 700; background: #FFF8DC; }
 .big { font-size: 22px; font-weight: 700; }
 .hidden { display: none !important; }
 .more { text-align: center; margin: 8px 0; }
+.top .topbtn { color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.3); border-radius: 6px; padding: 4px 10px; font-size: 16px; }
+.card h4 { margin: 12px 0 4px; font-size: 12px; color: var(--navy); }
+.ins { margin: 0; padding-left: 18px; } .ins li { margin: 4px 0; line-height: 1.4; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 90px; padding-top: 4px; }
+.bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 0; }
+.bar i { display: block; background: var(--blue); border-radius: 2px 2px 0 0; }
+.bar span { font-size: 9px; color: var(--muted); text-align: center; overflow: hidden; white-space: nowrap; }
+details > summary { cursor: pointer; list-style: none; } details > summary::-webkit-details-marker { display: none; }
+details.card > summary { padding: 2px 0; }
+details.bill { border-bottom: 1px solid var(--border); } details.bill > summary.row { border-bottom: 0; } details.bill[open] { background: var(--alt); padding-bottom: 4px; }
+.daypick { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; } .daypick input { flex: 1; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; font-size: 16px; min-width: 0; }
+.btn.dis { pointer-events: none; opacity: .4; }
+input.qty { width: 64px; border: 1px solid #CBD5E1; border-radius: 6px; padding: 5px; text-align: right; font-size: 16px; }
+table.po td { vertical-align: middle; } tr.urgent td:first-child { border-left: 3px solid var(--red); }
+textarea { width: 100%; border: 1px solid #CBD5E1; border-radius: 6px; padding: 8px; font: inherit; font-size: 13px; }
+pre.msg { white-space: pre-wrap; font: inherit; font-size: 12.5px; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 6px 0; }
+.nav a { padding: 6px 0 7px; font-size: 10.5px; }
 </style>
 </head>
 <body>
