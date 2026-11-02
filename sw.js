@@ -1,6 +1,6 @@
 // Offline shell for the Arihant phone app: the app files are cached; the business data stays in the phone's storage
 // (encrypted) and Gmail is only contacted when you tap "Get latest from Gmail".
-const CACHE = 'arihant-phone-v5';
+const CACHE = 'arihant-phone-v6';
 const FILES = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

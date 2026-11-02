@@ -113,6 +113,8 @@ function index(d) {
 }
 // bill line: [bill id, date, party, product id, qty, free, rate, amount, net value (after discount, before GST), name (when not in the product list)]
 const pname = l => (l[3] ? S.idx.prod.get(l[3])?.n || 'Item ' + l[3] : l[9] || 'Item');
+// [10] = purchase cost of the line, the same figure the ERP's profit uses (null / missing = no cost known)
+const hasLineCost = () => (S.data.lines || []).some(l => l.length > 10);
 // cost of one unit: landing cost (purchase value ÷ all units received, free too), else the last purchase rate
 const unitCost = p => (p ? p.lc || p.lr || 0 : 0);
 const addD = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
@@ -252,10 +254,49 @@ const pf = list => { const sale = sum(list, b => b.s || 0), cost = sum(list, b =
 const pfTxt = x => `<b class="${x.profit < 0 ? 'red' : 'green'}">${short(x.profit)}</b>${x.pct !== null ? ` <span class="muted small">${x.pct.toFixed(1)}%</span>` : ''}`;
 function profit(q) {
   const d = S.data, tab = q.tab || 'day';
-  const T = [['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise']];
+  const T = [['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
   if (!hasProfit()) { frame('Profit', NOLINES, '#/more'); return; }
   const withP = d.bills.filter(b => b.s !== undefined);
   const note = '<div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted. The same figure as the ERP\'s profit reports.</div>';
+  if (tab === 'product') {
+    // which product (or company) made how much: net sale value − purchase cost of each line, as in the ERP
+    if (!hasLineCost()) { frame('Profit', tabsHtml(T, tab) + NOLINES, '#/more'); return wireTabs('#/profit'); }
+    const P = span(q.s || 'month', q.m), by = q.by === 'company' ? 'company' : 'product';
+    const m = new Map(); let noCost = 0;
+    for (const l of d.lines) {
+      if (l[1] < P.from || l[1] > P.to) continue;
+      if (l[10] === null || l[10] === undefined) { noCost++; continue; }
+      const pr = l[3] ? S.idx.prod.get(l[3]) : null;
+      if (q.co && (pr?.co || '(no company)') !== q.co) continue;
+      const k = by === 'company' ? pr?.co || '(no company)' : l[3] || 'n:' + l[9];
+      const x = m.get(k) || m.set(k, { k, id: by === 'product' ? l[3] : null, name: by === 'company' ? k : pname(l), co: pr?.co || '', sale: 0, cost: 0, q: 0, f: 0, bills: new Set(), n: 0 }).get(k);
+      x.sale += l[8]; x.cost += l[10]; x.q += l[4]; x.f += l[5]; x.bills.add(l[0]); x.n++;
+    }
+    const all = [...m.values()].map(x => ({ ...x, profit: x.sale - x.cost, pct: x.sale ? (x.sale - x.cost) / x.sale * 100 : null, nb: x.bills.size }));
+    const so = q.sort || 'high';
+    const extra = `&s=${P.k}${q.m ? '&m=' + q.m : ''}&by=${by}${q.co ? '&co=' + encodeURIComponent(q.co) : ''}`;
+    frame('Profit', `${tabsHtml(T, tab)}${spanChips('#/profit?tab=product', P.k, `&by=${by}${q.co ? '&co=' + encodeURIComponent(q.co) : ''}`)}
+      <div class="chips">${[['product', 'By product'], ['company', 'By company']].map(([k, l]) => `<a class="chip ${by === k ? 'on' : ''}" href="#/profit?tab=product&s=${P.k}&by=${k}">${l}</a>`).join('')}${q.co ? `<a class="chip on" href="#/profit?tab=product&s=${P.k}&by=product">✕ ${esc(q.co)}</a>` : ''}</div>
+      <div class="filters"><input data-q placeholder="Find ${by}"><select data-sort>${[['high', 'Most profit first'], ['loss', 'Loss / least profit first'], ['pct', 'Highest margin %'], ['lowpct', 'Lowest margin %'], ['sale', 'Highest sale']].map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>
+      <div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted — the same figure as the ERP's profit reports, so the products add up to the bill-wise total.${noCost ? ` ${noCost} lines with no purchase cost are left out.` : ''}</div>`, '#/more');
+    wireTabs('#/profit');
+    const draw = () => {
+      const t = $('[data-q]').value.trim().toLowerCase(), o = $('[data-sort]').value;
+      const rows = all.filter(x => !t || (x.name + ' ' + x.co).toLowerCase().includes(t));
+      const key = { high: (a, b) => b.profit - a.profit, loss: (a, b) => a.profit - b.profit, pct: (a, b) => (b.pct ?? -1e9) - (a.pct ?? -1e9), lowpct: (a, b) => (a.pct ?? 1e9) - (b.pct ?? 1e9), sale: (a, b) => b.sale - a.sale }[o];
+      rows.sort(key);
+      const tot = pf([]); tot.sale = sum(rows, x => x.sale); tot.cost = sum(rows, x => x.cost); tot.profit = tot.sale - tot.cost; tot.pct = tot.sale ? tot.profit / tot.sale * 100 : null;
+      const loss = rows.filter(x => x.profit < 0);
+      $('[data-k]').innerHTML = `${kpi('Profit', pfTxt(tot), `${rows.length} ${by === 'company' ? 'companies' : 'products'} · ${P.label}`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}
+        ${kpi('Sold at a loss', num(loss.length), loss.length ? short(sum(loss, x => x.profit)) : '', loss.length ? 'r' : '')}${kpi('Best', rows.length ? short(Math.max(...rows.map(x => x.profit))) : '—', rows.length ? esc([...rows].sort((a, b) => b.profit - a.profit)[0].name) : '')}`;
+      $('[data-h]').innerHTML = `<span>${rows.length} ${by === 'company' ? 'companies' : 'products'}</span><span>${dmy(P.from)} – ${dmy(P.to)}</span>`;
+      more($('[data-list]'), rows, x => `<a class="row" href="${by === 'company' ? `#/profit?tab=product&s=${P.k}&by=product&co=${encodeURIComponent(x.k)}` : x.id ? '#/product/' + x.id : '#/profit?tab=product'}"><span class="m"><b>${esc(x.name)}</b><small>${by === 'company' ? '' : esc(x.co) + ' · '}${num(x.q)}${x.f ? ' + ' + num(x.f) + ' free' : ''} · ${x.nb} bills · sale ${short(x.sale)}</small></span><span class="r">${pfTxt(x)}</span></a>`);
+      history.replaceState(null, '', `#/profit?tab=product${extra.replace(/&sort=[^&]*/, '')}&sort=${o}`);
+    };
+    $('[data-q]').oninput = draw; $('[data-sort]').onchange = draw; draw();
+    return;
+  }
   if (tab === 'bill') {
     let day = q.day || d.today;
     if (!q.day && !withP.some(b => b.d === day)) day = [...new Set(withP.map(b => b.d))].sort().pop() || day;
@@ -528,7 +569,8 @@ function product(id) {
         ${kpi('Stock lasts', cover === null ? '—' : cover < 1 ? 'under 1 day' : Math.round(cover) + ' days', `at ${num(avg)} a day (90-day average)`, cover !== null && cover < 15 ? 'r' : cover !== null && cover > 120 ? 'a' : '')}
         ${kpi('Last purchase', p.lr ? money(p.lr) : '—', sup ? `${esc(sup.name)}${p.ld ? ' · ' + dmy(p.ld) : ''}${p.lf ? ' · scheme ' + esc(p.lf) : ''}` : 'no purchase in the ERP data')}
         ${kpi('Net sale per unit', avgRate ? money(avgRate) : '—', 'after discount & free goods, before GST')}${kpi('Landing cost per unit', uc ? money(uc) : '—', uc && avgRate ? `margin ~${((avgRate - uc) / avgRate * 100).toFixed(1)}%${p.lc ? ' · free goods received counted' : ''}` : '', uc && avgRate < uc ? 'r' : '')}
-        ${kpi('MRP', p.mrp ? money(p.mrp) : '—')}</div>
+        ${kpi('MRP', p.mrp ? money(p.mrp) : '—')}
+        ${(() => { const c = ls2.filter(l => l[10] !== null && l[10] !== undefined); if (!c.length) return ''; const fy = c.filter(l => l[1] >= d.fy_start), x = pf([]); x.sale = sum(fy, l => l[8]); x.cost = sum(fy, l => l[10]); x.profit = x.sale - x.cost; x.pct = x.sale ? x.profit / x.sale * 100 : null; return kpi('Profit this FY', `<a href="#/profit?tab=product&s=fy">${pfTxt(x)}</a>`, `on ${short(x.sale)} sale, free goods counted`, x.profit < 0 ? 'r' : 'g'); })()}</div>
       ${(() => { const set = poSet(), r = poRow(p, set), ss = saleScheme(p.i); return `<div style="margin-top:8px">${p.lf ? `<span class="tag g">scheme received ${esc(p.lf)}</span> ` : ''}${ss ? `<span class="tag b">scheme given ${esc(ss)}</span> ` : ''}<span class="tag">regular sale ~${num(Math.round(r.monthly))}/month</span>${r.need ? ` <span class="tag a">suggested order ${r.need}</span>` : ''}</div>
         ${r.D.odd.length ? `<div class="alert" style="margin-top:6px">⚠ One-off big order${r.D.odd.length > 1 ? 's' : ''} in the last ${set.basis} days, left out of the regular sale: ${oddTxt(r).replace('one-off: ', '')}</div>` : ''}
         ${r.bigBuy ? `<div class="alert" style="margin-top:6px">⚠ Last purchase was ${num(r.bigBuy)} on ${dmy(p.ld)} — about ${Math.round(r.bigBuy / Math.max(r.monthly, 0.1))} months of regular sale. Probably bought for a party's order.</div>` : ''}`; })()}
