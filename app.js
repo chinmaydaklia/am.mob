@@ -254,23 +254,26 @@ const prodRow = (x, extra = '') => `<a class="row" href="${x.id ? '#/product/' +
 const hasProfit = () => S.data.bills.some(b => b.s !== undefined);
 const pf = list => { const sale = sum(list, b => b.s || 0), cost = sum(list, b => b.c || 0); return { sale, cost, profit: sale - cost, pct: sale ? (sale - cost) / sale * 100 : null, n: list.length }; };
 const pfTxt = x => `<b class="${x.profit < 0 ? 'red' : 'green'}">${short(x.profit)}</b>${x.pct !== null ? ` <span class="muted small">${x.pct.toFixed(1)}%</span>` : ''}`;
-// credit notes and returns to parties in a period (before GST), from the ERP: expiry credit and other credit notes are a
-// loss, sales returns lose only their profit (at the period's margin). Supplier credit is not income (taken off a purchase bill).
+// credit notes and returns of a period (before GST), from the ERP: expiry credit and other credit notes to parties are a
+// loss, sales returns lose only their profit (at the period's margin). Supplier expiry credit lowers the purchase cost;
+// the purchase cost of the shop's own expired stock sent back with it comes off.
 function notesOf(from, to, x) {
-  const r = { g: 0, r: 0, o: 0 };
-  for (const n of S.data.cn || []) if (n[0] >= from && n[0] <= to) r[n[1]] = (r[n[1]] || 0) + n[2];
+  const r = { g: 0, r: 0, o: 0, s: 0, own: 0 };
+  for (const n of S.data.cn || []) if (n[0] >= from && n[0] <= to) { r[n[1]] = (r[n[1]] || 0) + n[2]; if (n[1] === 's') r.own += n[3] || 0; }
   r.rp = x.sale ? r.r * x.profit / x.sale : 0;
-  r.any = r.g || r.r || r.o;
-  r.net = x.profit - r.g - r.o - r.rp;
+  r.any = r.g || r.r || r.o || r.s;
+  r.net = x.profit - r.g - r.o - r.rp + r.s - r.own;
   r.pct = x.sale ? r.net / x.sale * 100 : null;
   return r;
 }
 const netTxt = r => `<span class="${r.net < 0 ? 'red' : ''}">${short(r.net)}</span>${r.pct === null ? '' : ` <small>${r.pct.toFixed(1)}%</small>`}`;
 const notesCard = (r, label) => !S.data.cn ? '' : `<div class="card"><h3>After credit notes <small class="muted">${esc(label)}</small></h3>
-  <div class="row"><span class="m">Profit on bills</span><span class="r">${short(r.net + r.g + r.o + r.rp)}</span></div>
+  <div class="row"><span class="m">Profit on bills</span><span class="r">${short(r.net + r.g + r.o + r.rp - r.s + r.own)}</span></div>
   <div class="row"><span class="m">− Expiry credit to parties</span><span class="r red">${short(r.g)}</span></div>
   <div class="row"><span class="m">− Profit lost on sales returns<small>returns of ${short(r.r)}; the goods come back to stock</small></span><span class="r red">${short(r.rp)}</span></div>
   ${r.o ? `<div class="row"><span class="m">− Other credit notes</span><span class="r red">${short(r.o)}</span></div>` : ''}
+  ${r.s ? `<div class="row"><span class="m">+ Purchase cost cut by supplier expiry credit<small>credit notes from suppliers, taken off their bills</small></span><span class="r green">${short(r.s)}</span></div>
+  <div class="row"><span class="m">− Your own expired stock sent back<small>what it cost you; goods parties returned are not counted again</small></span><span class="r red">${short(r.own)}</span></div>` : ''}
   <div class="row"><span class="m"><b>= Profit after credit notes</b></span><span class="r"><b>${netTxt(r)}</b></span></div></div>`;
 function profit(q) {
   const d = S.data, tab = q.tab || 'day';
@@ -350,11 +353,11 @@ function profit(q) {
   for (const m of months) m.cn = notesOf(m.k + '-01', m.k + '-31', m.x);
   const totN = notesOf(d.fy_start || '0000', d.today, tot);
   const signed = v => `<span class="${v < 0 ? 'red' : 'green'}">${v < 0 ? '−' : '+'}${short(Math.abs(v))}</span>`;
-  const cnCell = r => (cnOn ? `<td class="n">${signed(-(r.g + r.o + r.rp))}</td><td class="n">${netTxt(r)}</td>` : '');
+  const cnCell = r => (cnOn ? `<td class="n">${signed(r.s - r.own - r.g - r.o - r.rp)}</td><td class="n">${netTxt(r)}</td>` : '');
   frame('Profit', `${tabsHtml(T, tab)}
     <div class="kpis" style="margin-bottom:8px">${kpi('Profit this FY', pfTxt(tot), `${tot.n} bills`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}</div>
     ${months.length ? `<div class="card"><h3>Profit by month</h3>${bars(months.map(m => ({ label: m.k.slice(5), v: Math.max(0, m.x.profit) })))}</div>` : ''}
-    <div class="card"><div class="tw"><table><thead><tr><th>Month</th><th class="n">Bills</th><th class="n">Sale</th><th class="n">Cost</th><th class="n">Profit</th><th class="n">%</th>${cnOn ? '<th class="n">Credit notes</th><th class="n">After notes</th>' : ''}</tr></thead>
+    <div class="card"><div class="tw"><table><thead><tr><th>Month</th><th class="n">Bills</th><th class="n">Sale</th><th class="n">Cost</th><th class="n">Profit</th><th class="n">%</th>${cnOn ? '<th class="n">Credit notes ±</th><th class="n">After notes</th>' : ''}</tr></thead>
       <tbody>${months.map(m => `<tr><td><a href="#/profit?tab=day&s=custom&m=${m.k}">${new Date(m.k + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</a></td><td class="n">${m.x.n}</td><td class="n">${short(m.x.sale)}</td><td class="n">${short(m.x.cost)}</td><td class="n ${m.x.profit < 0 ? 'red' : ''}">${short(m.x.profit)}</td><td class="n">${m.x.pct === null ? '' : m.x.pct.toFixed(1)}</td>${cnCell(m.cn)}</tr>`).join('')}</tbody>
       <tfoot><tr><td>FY</td><td class="n">${tot.n}</td><td class="n">${short(tot.sale)}</td><td class="n">${short(tot.cost)}</td><td class="n">${short(tot.profit)}</td><td class="n">${tot.pct === null ? '' : tot.pct.toFixed(1)}</td>${cnCell(totN)}</tr></tfoot></table></div></div>${notesCard(totN, 'this FY')}${note}`, '#/more');
   wireTabs('#/profit');
