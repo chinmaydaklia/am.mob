@@ -194,6 +194,7 @@ function home() {
   const over90 = sum(d.open.filter(o => o.k === 's' && o.age > 90), o => o.b);
   const expd = d.expiry.filter(x => x.dl < 0 && x.dl >= -365), oldExp = d.expiry.filter(x => x.dl < -365), near = d.expiry.filter(x => x.dl >= 0 && x.dl <= 90);
   const edToday = d.edits.filter(e => String(e.at).startsWith(t));
+  const chgHigh = (d.chg || []).filter(c => c.l === 'high' && String(c.f) >= addD(t, -6));
   const ck = d.fawin?.check, runs = d.fawin?.runs_today || [];
   // last 30 days of sales
   const days = Array.from({ length: 30 }, (_, k) => addD(t, k - 29)).map(x => ({ label: x.slice(8), v: I.daySales.get(x) || 0 }));
@@ -241,6 +242,7 @@ function home() {
       ${kpi('Outstanding', `<a href="#/due">${short(recv)}</a>`, `${d.open.filter(o => o.k === 's').length} bills · over 90 days ${short(over90)}`, 'r')}${kpi('Payable', `<a href="#/purchases">${short(pay)}</a>`, 'FAWin open purchase bills', 'a')}</div></div>
     <div class="card"><h3>Tracks <a href="#/tracks">all →</a></h3>${trackTable(true)}</div>
     <div class="card"><h3>Alerts</h3>
+      ${d.chg ? `<a class="row" href="#/edits?days=7"><span class="m"><b>Bills changed in FAWin (7 days)</b><small>deleted bill, product removed / added, quantity or amount changed</small></span><span class="r ${chgHigh.length ? 'red' : ''}">${chgHigh.length}</span></a>` : ''}
       <a class="row" href="#/edits"><span class="m"><b>Changes in FAWin today</b><small>edited or deleted bills, with who did it</small></span><span class="r ${edToday.length ? 'amber' : ''}">${edToday.length}</span></a>
       <a class="row" href="#/stock?tab=expiry"><span class="m"><b>Expired in the last year</b><small>${expd.length} batches${oldExp.length ? ` · ${oldExp.length} older batches (probably leftovers) not counted` : ''}</small></span><span class="r red">${short(sum(expd, x => x.v))}</span></a>
       <a class="row" href="#/stock?tab=expiry"><span class="m"><b>Expiring within 90 days</b><small>${near.length} batches</small></span><span class="r amber">${short(sum(near, x => x.v))}</span></a></div>
@@ -831,20 +833,33 @@ function stock(q) {
 }
 function edits(q) {
   const d = S.data;
-  const users = [...new Set(d.edits.map(e => e.un).filter(Boolean))].sort();
+  const chg = d.chg || [];
+  const users = [...new Set([...d.edits.map(e => e.un), ...chg.map(c => c.un)].filter(Boolean))].sort();
   const days = Number(q.days || 7);
+  const LV = { high: ['🔴', 'Priority', 'red'], medium: ['🟠', 'Rate', 'amber'], low: ['ℹ', 'Batch / small', 'muted'] };
   frame('Changes in FAWin', `<div class="chips">${[[1, 'Today'], [7, '7 days'], [45, '45 days']].map(([k, l]) => `<a class="chip ${days === k ? 'on' : ''}" href="#/edits?days=${k}${q.u ? '&u=' + encodeURIComponent(q.u) : ''}">${l}</a>`).join('')}</div>
-    <div class="filters"><select data-u><option value="">All users</option>${users.map(u => `<option ${q.u === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select><select data-t><option value="">All documents</option><option value="12">Bills</option><option value="11">Purchases</option><option value="18">Challans</option><option value="money">Amount changed</option><option value="party">Party changed</option><option value="deleted">Deleted</option></select></div>
-    <div class="alert b">From FAWin's own edit log: what the document was before the change, and the user who changed it.</div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>`, '#/more');
+    <div class="filters"><select data-u><option value="">All users</option>${users.map(u => `<option ${q.u === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select><select data-l><option value="">All priorities</option><option value="high">🔴 Priority only</option><option value="medium">🟠 Rate changed</option><option value="low">ℹ Batch changed</option></select></div>
+    ${d.chg ? `<div class="alert b">What was changed in each bill: 🔴 bill deleted, product removed or added, quantity / free changed, amount or party changed · 🟠 rate changed · ℹ batch changed.</div><div class="card"><h3 data-ch></h3><div class="list" data-cl></div></div>` : ''}
+    <div class="card"><h3 data-h></h3><div class="small muted">From FAWin's own edit log: the document before the change and the user who changed it.</div><div class="list" data-list></div></div>`, '#/more');
   const from = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+  const since = days === 1 ? d.today : from;
+  const rank = { high: 0, medium: 1, low: 2 };
   const draw = () => {
-    const u = $('[data-u]').value, t = $('[data-t]').value;
-    const rows = d.edits.filter(e => String(e.at) >= (days === 1 ? d.today : from) && (!u || e.un === u) && (!t || (t === 'money' ? e.na != null && Math.abs(e.oa - e.na) > 0.5 : t === 'party' ? e.op && e.np && e.op !== e.np : t === 'deleted' ? e.na == null : String(e.t) === t)));
-    $('[data-h]').textContent = `${rows.length} changes`;
+    const u = $('[data-u]').value, lv = $('[data-l]').value;
+    if (d.chg) {
+      const rows = chg.filter(c => String(c.f) >= since && (!u || c.un === u) && (!lv || c.l === lv)).sort((a, b) => (rank[a.l] ?? 0) - (rank[b.l] ?? 0) || String(b.f).localeCompare(String(a.f)));
+      const hi = rows.filter(c => c.l === 'high').length;
+      $('[data-ch]').innerHTML = `What changed <span class="${hi ? 'red' : 'muted'}">${hi} priority</span> · ${rows.length} in all`;
+      more($('[data-cl]'), rows, c => { const L = LV[c.l] || LV.high; const amt = c.oa != null && c.na != null && Math.abs(c.oa - c.na) > 0.5;
+        return `<div class="row"><span class="m"><b>${L[0]} ${esc(c.doc || '')} ${esc(c.n || '')}</b><small>${dmy(c.d)} · ${esc(c.p || '')}${c.np ? ' → ' + esc(c.np) : ''}<br><b class="${L[2]}">${esc(c.w || '')}</b>${(c.x || []).map(x => `<br><span class="${(LV[x.level] || LV.high)[2]}">• ${esc(x.text || x)}</span>`).join('')}<br>found ${esc(String(c.f).slice(0, 16).split(' ').map((x, i) => (i ? x : dmy(x))).join(' '))}${c.un ? ` · by <b>${esc(c.un)}</b>` : ''}</small></span>
+        <span class="r">${c.na == null && c.oa != null ? `<span class="red">${money(c.oa)}</span>` : amt ? `<span class="muted">${money(c.oa)}</span><br><b class="amber">${money(c.na)}</b>` : c.na != null ? `<span class="muted">${money(c.na)}</span>` : ''}</span></div>`; });
+    }
+    const rows = d.edits.filter(e => String(e.at) >= since && (!u || e.un === u));
+    $('[data-h]').textContent = `FAWin edit log · ${rows.length}`;
     more($('[data-list]'), rows, e => `<div class="row"><span class="m"><b>${esc(DOC[e.t] || 'Document')} ${esc(e.n || '')}</b><small>${esc(String(e.at).slice(0, 16).split(' ').map((x, i) => (i ? x : dmy(x))).join(' '))} · <b>${esc(e.un || '?')}</b>${e.op && e.np && e.op !== e.np ? `<br>party: ${esc(e.op)} → ${esc(e.np)}` : e.np ? '<br>' + esc(e.np) : ''}</small></span>
       <span class="r">${e.na == null ? '<span class="red">deleted</span>' : Math.abs((e.oa || 0) - e.na) > 0.5 ? `<span class="muted">${money(e.oa)}</span><br><b class="amber">${money(e.na)}</b>` : `<span class="muted">${money(e.na)}</span><div class="small">same amount</div>`}</span></div>`);
   };
-  $('[data-u]').onchange = draw; $('[data-t]').onchange = draw; draw();
+  $('[data-u]').onchange = draw; $('[data-l]').onchange = draw; draw();
 }
 function reports() {
   const d = S.data;
