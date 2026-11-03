@@ -697,6 +697,23 @@ function collect(q) {
 // also over a third of everything sold of it in the period (a party asked for a big lot once). Free goods count as
 // sold (they leave the shelf). Quantities are kept on this phone until the order is marked sent.
 const PO = { cart: 'am_po_cart', set: 'am_po_set', sent: 'am_po_sent' };
+// An order quantity is written as to suppliers: "24", or "20+4" (paid + free).
+const qParse = v => { const m = /^\s*(\d+)\s*(?:\+\s*(\d+))?\s*$/.exec(String(v ?? '')); if (!m) return null; const paid = Number(m[1]), free = Number(m[2] || 0); return paid + free > 0 ? { paid, free, txt: free ? `${paid}+${free}` : String(paid) } : null; };
+const qPaid = v => qParse(v)?.paid || 0;
+// The last purchase is kept as its totals ("100+20"): its scheme step is the same ratio in the smallest whole numbers,
+// with a paid part of 2 or 5 brought up to 10 ("5+1" → "10+2")
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+function schStep(lf) {
+  const m = /^(\d+)\+(\d+)$/.exec(lf || ''); if (!m) return null;
+  let a = Number(m[1]), b = Number(m[2]); if (!a || !b) return null;
+  const g = gcd(a, b); a /= g; b /= g;
+  if (a === 2 || a === 5) { const k = 10 / a; a *= k; b *= k; } // 1+1 (buy one get one) stays as it is
+  // an odd lot ("22+3") is not a scheme step: shown as information only
+  if (!(a <= 12 || (a % 5 === 0 && a <= 30))) return null;
+  return [a, b];
+}
+// a quantity near the need, in whole scheme steps: need 24 on 10+2 → "20+4"
+const inSteps = (need, step) => { if (!step) return need ? String(need) : ''; const k = Math.max(1, Math.round((need || step[0] + step[1]) / (step[0] + step[1]))); return `${k * step[0]}+${k * step[1]}`; };
 const poSet = () => ({ basis: 90, cover: 30, oneoff: false, scheme: true, ...JSON.parse(ls.get(PO.set) || '{}') });
 const poCart = () => JSON.parse(ls.get(PO.cart) || '{}');
 function demand(pid, from) {
@@ -721,13 +738,13 @@ function poRow(p, set, cart = poCart()) {
   const need = Math.max(0, Math.ceil(avg * set.cover - Math.max(p.q, 0)));
   // stock that came from a big one-off purchase: the last purchase covers 6 months or more of regular sale
   const bigBuy = p.lq && p.lq >= 30 && p.lq >= 6 * Math.max(regAvg * 30, 1) ? p.lq : 0;
-  return { p, D, avg, need, qty: cart[p.i] || 0, cover: avg ? p.q / avg : null, bigBuy, monthly: regAvg * 30 };
+  return { p, D, avg, need, qty: qPaid(cart[p.i]), cover: avg ? p.q / avg : null, bigBuy, monthly: regAvg * 30 };
 }
 const oddTxt = r => (r.D.odd.length ? `one-off: ${r.D.odd.map(b => `${num(b.u)} to ${esc(S.idx.p.get(b.p)?.name || 'a party')} (${dmy(b.d)})`).join(', ')}` : '');
 function order(q) {
   const d = S.data, tab = q.tab || 'make';
   if (!hasLines()) return frame('Purchase order', NOLINES, '#/order');
-  if (q.add) { const pr = S.idx.prod.get(Number(q.add)); const c = poCart(); if (pr) { const r = poRow(pr, poSet(), c); c[pr.i] = c[pr.i] || Math.max(r.need, 1); ls.set(PO.cart, JSON.stringify(c)); toast('Added to the order'); } location.replace(`#/order?co=${encodeURIComponent(pr?.co || '(no company)')}`); return; }
+  if (q.add) { const pr = S.idx.prod.get(Number(q.add)); const c = poCart(); if (pr) { const r = poRow(pr, poSet(), c); c[pr.i] = c[pr.i] || inSteps(Math.max(r.need, 1), schStep(pr.lf)); ls.set(PO.cart, JSON.stringify(c)); toast('Added to the order'); } location.replace(`#/order?co=${encodeURIComponent(pr?.co || '(no company)')}`); return; }
   if (tab === 'sent') return sentOrders();
   const set = poSet();
   if (q.co !== undefined) return companyOrder(q.co, set, q);
@@ -760,7 +777,7 @@ function order(q) {
 }
 function companyOrder(co, set, q) {
   const d = S.data, cart = poCart();
-  const rows = (d.prod || []).filter(p => (p.co || '(no company)') === co).map(p => ({ ...poRow(p, set, cart), ss: saleScheme(p.i) }))
+  const rows = (d.prod || []).filter(p => (p.co || '(no company)') === co).map(p => ({ ...poRow(p, set, cart), ss: saleScheme(p.i), step: schStep(p.lf) }))
     .sort((a, b) => (b.p.q <= 0 && b.D.reg > 0) - (a.p.q <= 0 && a.D.reg > 0) || b.need - a.need || b.D.reg - a.D.reg || a.p.n.localeCompare(b.p.n));
   // suppliers this company's goods came from (most products first)
   const sup = [...rows.reduce((m, r) => (r.p.ls ? m.set(r.p.ls, (m.get(r.p.ls) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]).map(([id]) => S.idx.p.get(id)).filter(Boolean);
@@ -773,12 +790,13 @@ function companyOrder(co, set, q) {
     <div class="card"><div class="polist" data-rows></div></div>
     <div class="card"><h3><span data-tot></span><span data-val></span></h3>
       <div class="filters"><select data-to>${sup.map(x => `<option value="${x.id}">${esc(x.name)}${x.wa ? '' : ' (no WhatsApp no.)'}</option>`).join('')}<option value="">Choose the contact in WhatsApp</option></select></div>
-      <label class="muted small" style="display:block;margin-bottom:6px"><input type="checkbox" data-sch ${set.scheme ? 'checked' : ''}> Mention the last scheme received in the message</label>
+      <label class="muted small" style="display:block;margin-bottom:6px"><input type="checkbox" data-sch ${set.scheme ? 'checked' : ''}> For items without a scheme typed, mention the last scheme received</label>
       <textarea data-msg rows="8"></textarea>
       <div class="actions" style="margin-top:8px"><a class="btn wa" data-wa target="_blank" rel="noopener">📲 Send on WhatsApp</a><button class="btn ghost" data-copy>Copy</button><button class="btn green" data-done>Mark as sent</button></div>
       <div class="muted small" style="margin-top:6px">"Mark as sent" keeps a copy under Sent orders and clears these quantities.</div></div>
     <a class="btn ghost sm" href="#/order">◀ All companies</a>`, '#/order');
-  const val = r => cart[r.p.i] || 0;
+  const val = r => qPaid(cart[r.p.i]);            // the paid quantity (for value and "in this order")
+  const qtxt = r => qParse(cart[r.p.i])?.txt || '';  // as written: "24" or "20+4"
   const pick = { all: () => true, need: r => r.need > 0 || val(r) > 0, out: r => r.p.q <= 0, odd: r => r.D.odd.length || r.bigBuy, dead: r => r.p.q > 0 && !r.D.T, draft: r => val(r) > 0 }[view] || (() => true);
   const draw = () => {
     const s = $('[data-q]').value.trim().toLowerCase();
@@ -787,9 +805,18 @@ function companyOrder(co, set, q) {
       <div class="m"><a href="#/product/${r.p.i}"><b>${esc(r.p.n)}</b></a> <span class="muted small">${esc(r.p.pk || '')}</span>
         <small>Stock <b class="${r.p.q <= 0 ? 'red' : ''}">${num(r.p.q)}</b> · sold ${num(r.D.T)} in ${set.basis} d (~${num(Math.round(r.monthly))}/month regular) · ${r.cover === null ? 'no regular sale' : `lasts ${Math.round(r.cover)} d`}${r.p.lr ? ` · ${money(r.p.lr)}` : ''}</small>
         ${r.D.odd.length ? `<small class="amber">⚠ ${oddTxt(r)}</small>` : ''}${r.bigBuy ? `<small class="amber">⚠ last purchase ${num(r.bigBuy)} (${dmy(r.p.ld)}) ≈ ${Math.round(r.bigBuy / Math.max(r.monthly, 0.1))} months of regular sale — bought for a party?</small>` : ''}</div>
-      <div class="sch">${r.p.lf ? `<span class="tag g" title="scheme received on the last purchase">get ${esc(r.p.lf)}</span>` : ''}${r.ss ? `<span class="tag b" title="scheme usually given on sales">give ${esc(r.ss)}</span>` : ''}</div>
-      <div class="q"><input class="qty" type="number" inputmode="numeric" min="0" data-id="${r.p.i}" value="${val(r) || ''}" placeholder="${r.need || ''}"><small>${r.need ? 'sugg. ' + r.need : ''}</small></div></div>`).join('') || '<div class="muted">No products here</div>';
-    document.querySelectorAll('[data-id]').forEach(inp => (inp.oninput = () => { const c = poCart(); const v = Math.max(0, Number(inp.value) || 0); if (v) c[inp.dataset.id] = v; else delete c[inp.dataset.id]; ls.set(PO.cart, JSON.stringify(c)); if (v) cart[inp.dataset.id] = v; else delete cart[inp.dataset.id]; totals(); }));
+      <div class="sch">${r.step ? `<button type="button" class="tag g" data-step="${r.p.i}" title="last purchase ${esc(r.p.lf)} — tap to order in this scheme">get ${r.step[0]}+${r.step[1]}</button>` : r.p.lf ? `<span class="tag g" title="last purchase">last ${esc(r.p.lf)}</span>` : ''}${r.ss ? `<span class="tag b" title="scheme usually given on sales">give ${esc(r.ss)}</span>` : ''}</div>
+      <div class="q"><input class="qty" type="text" inputmode="tel" autocomplete="off" data-id="${r.p.i}" value="${esc(qtxt(r))}" placeholder="${esc(inSteps(r.need, r.step) || '')}"><small>${r.need ? 'sugg. ' + esc(inSteps(r.need, r.step)) : ''}</small></div></div>`).join('') || '<div class="muted">No products here</div>';
+    const setQ = (id, raw) => { const c = poCart(); const v = qParse(raw); if (v) { c[id] = v.txt; cart[id] = v.txt; } else { delete c[id]; delete cart[id]; } ls.set(PO.cart, JSON.stringify(c)); totals(); };
+    document.querySelectorAll('[data-id]').forEach(inp => {
+      inp.oninput = () => { inp.classList.toggle('bad', !!inp.value.trim() && !qParse(inp.value)); setQ(inp.dataset.id, inp.value); };
+    });
+    // tap "get 10+2": fill the quantity in that scheme, near the suggestion (or one more step)
+    document.querySelectorAll('[data-step]').forEach(b => (b.onclick = () => {
+      const r = rows.find(x => String(x.p.i) === b.dataset.step), inp = document.querySelector(`[data-id="${b.dataset.step}"]`);
+      const cur = qParse(inp.value), st = r.step, k = cur ? Math.round((cur.paid + cur.free) / (st[0] + st[1])) + 1 : null;
+      inp.value = cur ? `${k * st[0]}+${k * st[1]}` : inSteps(r.need, st); inp.oninput();
+    }));
     totals();
   };
   const totals = () => {
@@ -797,13 +824,13 @@ function companyOrder(co, set, q) {
     $('[data-tot]').textContent = `${sel.length} items in this order`;
     $('[data-val]').textContent = '~' + short(sum(sel, r => val(r) * (r.p.lr || 0)));
     const msg = [`*Purchase Order — ${d.company || 'Arihant Medicos'}*`, `Company: ${co}`, ...(to ? [`To: ${to.name}`] : []), `Date: ${dmy(d.today)}`, '',
-      ...sel.map((r, k) => `${k + 1}) ${r.p.n}${r.p.pk ? ' (' + r.p.pk + ')' : ''} — Qty *${num(val(r))}*${withSch && r.p.lf ? ` (sch ${r.p.lf})` : ''}`), '', `Total items: ${sel.length}`, 'Please send at the earliest and confirm availability / scheme.'].join('\n');
+      ...sel.map((r, k) => `${k + 1}) ${r.p.n}${r.p.pk ? ' (' + r.p.pk + ')' : ''} — Qty *${qtxt(r)}*${withSch && r.step && !qParse(cart[r.p.i])?.free ? ` (last sch ${r.step[0]}+${r.step[1]})` : ''}`), '', `Total items: ${sel.length}`, 'Please send at the earliest and confirm availability / scheme.'].join('\n');
     $('[data-msg]').value = msg;
     $('[data-wa]').href = `https://wa.me/${to?.wa || ''}?text=${encodeURIComponent(msg)}`;
   };
   $('[data-q]').oninput = draw; $('[data-to]').onchange = totals;
   $('[data-sch]').onchange = () => { const x = poSet(); x.scheme = $('[data-sch]').checked; ls.set(PO.set, JSON.stringify(x)); totals(); };
-  $('[data-draft]').onclick = () => { const c = poCart(); let n = 0; for (const r of rows) if (r.need > 0 && !c[r.p.i]) { c[r.p.i] = r.need; cart[r.p.i] = r.need; n++; } ls.set(PO.cart, JSON.stringify(c)); toast(n ? `${n} products filled — check and change as needed` : 'Nothing more to suggest for this company'); draw(); };
+  $('[data-draft]').onclick = () => { const c = poCart(); let n = 0; for (const r of rows) if (r.need > 0 && !c[r.p.i]) { const q = inSteps(r.need, r.step); c[r.p.i] = q; cart[r.p.i] = q; n++; } ls.set(PO.cart, JSON.stringify(c)); toast(n ? `${n} products filled — check and change as needed` : 'Nothing more to suggest for this company'); draw(); };
   $('[data-clear]').onclick = () => { const c = poCart(); for (const r of rows) { delete c[r.p.i]; delete cart[r.p.i]; } ls.set(PO.cart, JSON.stringify(c)); draw(); };
   $('[data-copy]').onclick = () => navigator.clipboard?.writeText($('[data-msg]').value).then(() => toast('Copied'), () => toast('Select the text and copy it'));
   $('[data-done]').onclick = () => {
@@ -811,7 +838,7 @@ function companyOrder(co, set, q) {
     if (!sel.length) return toast('No quantities in this order');
     const to = sup.find(x => String(x.id) === $('[data-to]').value);
     const sent = JSON.parse(ls.get(PO.sent) || '[]');
-    sent.unshift({ at: new Date().toISOString().slice(0, 16).replace('T', ' '), to: co + (to ? ' → ' + to.name : ''), wa: to?.wa || '', items: sel.map(r => [r.p.i, r.p.n, val(r), r.p.lr || 0]), msg: $('[data-msg]').value });
+    sent.unshift({ at: new Date().toISOString().slice(0, 16).replace('T', ' '), to: co + (to ? ' → ' + to.name : ''), wa: to?.wa || '', items: sel.map(r => [r.p.i, r.p.n, qtxt(r), r.p.lr || 0]), msg: $('[data-msg]').value });
     ls.set(PO.sent, JSON.stringify(sent.slice(0, 200)));
     const c = poCart(); for (const r of rows) delete c[r.p.i]; ls.set(PO.cart, JSON.stringify(c));
     toast('Saved under Sent orders'); location.hash = '#/order?tab=sent';
@@ -821,7 +848,7 @@ function companyOrder(co, set, q) {
 function sentOrders() {
   const sent = JSON.parse(ls.get(PO.sent) || '[]');
   frame('Purchase order', `${tabsHtml([['make', 'Company-wise'], ['sent', 'Sent orders']], 'sent')}
-    <div class="card"><h3>${sent.length} orders kept on this phone</h3>${sent.map((o, k) => `<details class="bill"><summary class="row"><span class="m"><b>${esc(o.to)}</b><small>${esc(o.at)} · ${o.items.length} items</small></span><span class="r">~${short(sum(o.items, x => x[2] * x[3]))}</span></summary>
+    <div class="card"><h3>${sent.length} orders kept on this phone</h3>${sent.map((o, k) => `<details class="bill"><summary class="row"><span class="m"><b>${esc(o.to)}</b><small>${esc(o.at)} · ${o.items.length} items</small></span><span class="r">~${short(sum(o.items, x => qPaid(x[2]) * x[3]))}</span></summary>
       <pre class="msg">${esc(o.msg)}</pre><div class="actions" style="margin:6px 0"><a class="btn wa sm" target="_blank" rel="noopener" href="https://wa.me/${o.wa || ''}?text=${encodeURIComponent(o.msg)}">📲 Send again</a><button class="btn ghost sm" data-del="${k}">Delete</button></div></details>`).join('') || '<div class="muted">No orders sent yet</div>'}</div>`, '#/order');
   wireTabs('#/order');
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = () => { const x = JSON.parse(ls.get(PO.sent) || '[]'); x.splice(Number(b.dataset.del), 1); ls.set(PO.sent, JSON.stringify(x)); sentOrders(); }));
