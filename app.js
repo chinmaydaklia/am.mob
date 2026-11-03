@@ -613,7 +613,7 @@ function product(id) {
 const CSPANS = [['today', 'Today'], ['7', '7 days'], ['30', '30 days'], ['month', 'This month'], ['fy', 'This FY']];
 function collect(q) {
   const d = S.data, I = S.idx, tab = q.tab || 'day';
-  const T = [['day', 'Day-wise'], ['parties', 'By party'], ['follow', 'Follow-up'], ...(d.track_cash ? [['track', 'Track cash']] : [])];
+  const T = [['day', 'Day-wise'], ['tracks', 'By track'], ['parties', 'By party'], ['follow', 'Follow-up'], ...(d.track_cash ? [['track', 'Track cash']] : [])];
   const k = q.s || (tab === 'parties' ? '30' : 'today');
   const P = k === 'today' ? { k, from: d.today, to: d.today, label: 'today' } : span(k);
   const chips = `<div class="chips">${CSPANS.map(([x, l]) => `<a class="chip ${k === x ? 'on' : ''}" href="#/collect?tab=${tab}&s=${x}">${l}</a>`).join('')}</div>`;
@@ -625,6 +625,28 @@ function collect(q) {
       <div class="kpis" style="margin-bottom:8px">${kpi('Collected', short(sum(rows)), `${rows.length} receipts · ${new Set(rows.map(r => r.p)).size} parties · ${P.label}`, 'g')}${kpi('Cash', short(m.cash))}${kpi('Bank', short(m.bank))}${kpi('UPI', short(m.upi))}</div>
       ${days.map(([day, list]) => { const mm = list.reduce((x, r) => { x[modeKind(r.m)] += r.a; return x; }, { cash: 0, bank: 0, upi: 0 }); return `<details class="card" ${days.length <= 3 ? 'open' : ''}><summary class="row"><span class="m"><b>${new Date(day).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })}</b><small>${list.length} receipts · cash ${short(mm.cash)} · bank ${short(mm.bank)} · UPI ${short(mm.upi)}</small></span><span class="r"><b>${short(sum(list))}</b></span></summary>
         ${list.map(r => { const pp = I.p.get(r.p); return `<a class="row" href="#/party/${r.p}?tab=rec"><span class="m"><b>${esc(pp?.name || '')}</b><small>${esc(r.m || '')}${pp?.track ? ' · ' + esc(pp.track) : ''}${r.st.length ? ' · bills ' + r.st.map(([n, a]) => `${esc(n)} ${short(a)}`).join(', ') : ' · on account'}</small></span><span class="r">${money(r.a)}</span></a>`; }).join('')}</details>`; }).join('') || '<div class="card muted">No collection in this period</div>'}`, '#/collect');
+    return wireTabs('#/collect', `&s=${k}`);
+  }
+  if (tab === 'tracks') {
+    // each track: cash (incl. receipt-book R.No. receipts) and bank (NEFT / UPI / cheque) from its parties; still due today
+    const g = new Map();
+    const get = name => g.get(name) || g.set(name, { name, cash: 0, bank: 0, n: 0, parties: new Map(), due: 0 }).get(name);
+    for (const r of d.receipts) {
+      if (r.d < P.from || r.d > P.to) continue;
+      const pp = I.p.get(r.p), x = get(pp?.track || '(No track)'), kind = modeKind(r.m) === 'cash' ? 'cash' : 'bank';
+      x[kind] += r.a; x.n++;
+      const y = x.parties.get(r.p) || x.parties.set(r.p, { p: pp, cash: 0, bank: 0, n: 0, last: '' }).get(r.p);
+      y[kind] += r.a; y.n++; if (r.d > y.last) y.last = r.d;
+    }
+    for (const pp of d.parties) if (pp.due > 0.5) get(pp.track || '(No track)').due += pp.due;
+    const rows = [...g.values()].map(x => ({ ...x, total: x.cash + x.bank, pct: x.cash + x.bank + x.due > 0 ? (x.cash + x.bank) / (x.cash + x.bank + x.due) * 100 : null })).sort((a, b) => b.total - a.total || b.due - a.due);
+    const tot = rows.reduce((t, x) => ({ cash: t.cash + x.cash, bank: t.bank + x.bank, n: t.n + x.n }), { cash: 0, bank: 0, n: 0 });
+    frame('Collection', `${tabsHtml(T, tab)}${chips}
+      <div class="kpis" style="margin-bottom:8px">${kpi('Collected', short(tot.cash + tot.bank), `${tot.n} receipts · ${P.label}`, 'g')}${kpi('Cash', short(tot.cash), 'incl. receipt book (R.No.)')}${kpi('Bank', short(tot.bank), 'NEFT / UPI / cheque')}</div>
+      ${rows.map(x => `<details class="card"><summary class="row"><span class="m"><b>${esc(x.name)}</b><small>${x.parties.size} parties paid · cash ${short(x.cash)} · bank ${short(x.bank)}${x.due > 0.5 ? ` · due ${short(x.due)}` : ''}</small></span><span class="r"><b>${short(x.total)}</b>${x.pct !== null ? `<div class="small muted">${x.pct.toFixed(0)}% collected</div>` : ''}</span></summary>
+        ${[...x.parties.values()].sort((a, b) => b.cash + b.bank - a.cash - a.bank).map(y => `<a class="row" href="#/party/${y.p?.id}?tab=rec"><span class="m"><b>${esc(y.p?.name || '')}</b><small>${y.n} receipts · last ${dmy(y.last)}${y.cash ? ' · cash ' + short(y.cash) : ''}${y.bank ? ' · bank ' + short(y.bank) : ''}${y.p?.due > 0.5 ? ` · due <span class="red">${short(y.p.due)}</span>` : ''}</small></span><span class="r">${money(y.cash + y.bank)}</span></a>`).join('') || '<div class="muted small" style="padding:6px">Nothing collected in this period</div>'}
+        ${x.name !== '(No track)' ? `<a class="row" href="#/due?track=${encodeURIComponent(x.name)}"><span class="m small">Due list of this track →</span></a>` : ''}</details>`).join('') || '<div class="card muted">No receipts</div>'}
+      <div class="muted small" style="margin:6px 2px">"% collected" = collected ÷ (collected + still due today).</div>`, '#/collect');
     return wireTabs('#/collect', `&s=${k}`);
   }
   if (tab === 'parties') {
