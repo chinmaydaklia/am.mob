@@ -581,11 +581,11 @@ function sales(q) {
   wireTabs('#/sales', `&s=${P.k}`);
   more($('[data-list]'), rows, x => `<a class="row" href="#/party/${x.p.id}?tab=bills"><span class="m"><b>${esc(x.p.name)}</b><small>${esc([x.p.track, x.p.city].filter(Boolean).join(' · '))}${x.p.abc ? ' · ' + esc(x.p.abc) : ''}</small></span><span class="r">${short(x.a)}<div class="small">${P.pfrom ? pctTag(x.ch) : ''}</div></span></a>`);
 }
-// dispatch: b.x = [date, how] sent, 'c' went with its challan; none = not sent (only for bills from ds_since, the
+// dispatch: b.x = [date, how] sent, 'c' went with its challan, b.xp = packed that day (not left yet); none = not sent (only for bills from ds_since, the
 // first Send goods entry in AM — older bills went before dispatch was recorded, and older data has no ds_since)
-const dsTracked = b => !!(b.x || (S.data.ds_since && b.d >= S.data.ds_since));
+const dsTracked = b => !!(b.x || b.xp || (S.data.ds_since && b.d >= S.data.ds_since));
 const dsSent = b => !!b.x;
-const dsTag = (b, short) => b.x === 'c' ? '<span class="tag g">🚚 with challan</span>' : Array.isArray(b.x) ? `<span class="tag g">🚚 ${short ? dmy(b.x[0]).slice(0, 5) : dmy(b.x[0]) + ' · ' + esc(b.x[1])}</span>` : dsTracked(b) ? '<span class="tag a">⏳ Not sent</span>' : '';
+const dsTag = (b, short) => b.x === 'c' ? '<span class="tag g">🚚 with challan</span>' : Array.isArray(b.x) ? `<span class="tag g">🚚 ${short ? dmy(b.x[0]).slice(0, 5) : dmy(b.x[0]) + ' · ' + esc(b.x[1])}</span>` : b.xp ? `<span class="tag b">📦 Packed ${short ? dmy(b.xp).slice(0, 5) : dmy(b.xp) + ', not sent yet'}</span>` : dsTracked(b) ? '<span class="tag a">⏳ Not sent</span>' : '';
 function billDetails(b) {
   const p = S.idx.p.get(b.p), ls2 = S.idx.lByBill.get(b.id) || [];
   return `<details class="bill"><summary class="row"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · ${dmy(b.d)}${b.u ? ' · ' + esc(user(b.u)) : ''}${ls2.length ? ` · ${ls2.length} items` : ''}</small>${dsTracked(b) ? `<small>${dsTag(b)}</small>` : ''}</span><span class="r">${money(b.a)}</span></summary>
