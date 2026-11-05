@@ -433,7 +433,7 @@ function party(id, q) {
       ${rows.map(e => `<tr><td>${dmy(e.d)}</td><td>${esc(e.x || e.t + ' ' + (e.n || ''))}</td><td class="n">${e.dr ? money(e.dr) : ''}</td><td class="n">${e.cr ? money(e.cr) : ''}</td><td class="n">${money(Math.abs(e.bal))} ${e.bal >= 0 ? 'Dr' : 'Cr'}</td></tr>`).join('')}</tbody>
       <tfoot><tr><td></td><td>Closing</td><td class="n">${money(sum(rows, e => e.dr))}</td><td class="n">${money(sum(rows, e => e.cr))}</td><td class="n">${money(Math.abs(bal))} ${bal >= 0 ? 'Dr' : 'Cr'}</td></tr></tfoot></table></div>`;
   }
-  if (tab === 'bills') { const rows = [...(I.bills.get(p.id) || [])].reverse(); body.innerHTML = `<div class="tw"><table><thead><tr><th>Date</th><th>Bill</th><th class="n">Amount</th><th class="n">Disc.</th><th>By</th></tr></thead><tbody>${rows.map(b => `<tr><td>${dmy(b.d)}</td><td>${esc(b.n)}</td><td class="n">${money(b.a)}</td><td class="n">${b.disc ? money(b.disc) : ''}</td><td class="muted">${esc(user(b.u))}</td></tr>`).join('')}</tbody><tfoot><tr><td></td><td>${rows.length} bills</td><td class="n">${money(sum(rows))}</td><td></td><td></td></tr></tfoot></table></div>`; }
+  if (tab === 'bills') { const rows = [...(I.bills.get(p.id) || [])].reverse(); body.innerHTML = `<div class="tw"><table><thead><tr><th>Date</th><th>Bill</th><th class="n">Amount</th><th class="n">Disc.</th><th>By</th></tr></thead><tbody>${rows.map(b => `<tr><td>${dmy(b.d)}</td><td>${esc(b.n)} ${dsTag(b, true)}</td><td class="n">${money(b.a)}</td><td class="n">${b.disc ? money(b.disc) : ''}</td><td class="muted">${esc(user(b.u))}</td></tr>`).join('')}</tbody><tfoot><tr><td></td><td>${rows.length} bills</td><td class="n">${money(sum(rows))}</td><td></td><td></td></tr></tfoot></table></div>`; }
   if (tab === 'prod') {
     // what this party buys: 90 days against the 90 before, and items they used to buy but not lately
     if (!hasLines()) { body.innerHTML = NOLINES; return; }
@@ -511,7 +511,12 @@ function sales(q) {
     if (!q.day && !I.daySales.has(day)) day = [...I.daySales.keys()].filter(x => x <= d.today).sort().pop() || day;
     const rows = d.bills.filter(b => b.d === day).sort((a, b) => b.id - a.id);
     const s = (q.q || '').toLowerCase();
-    const shown = rows.filter(b => !s || b.n.toLowerCase().includes(s) || (I.p.get(b.p)?.name || '').toLowerCase().includes(s) || (I.lByBill.get(b.id) || []).some(l => pname(l).toLowerCase().includes(s)));
+    const found = rows.filter(b => !s || b.n.toLowerCase().includes(s) || (I.p.get(b.p)?.name || '').toLowerCase().includes(s) || (I.lByBill.get(b.id) || []).some(l => pname(l).toLowerCase().includes(s)));
+    // dispatched or not (when AM records dispatch for this day's bills)
+    const tracked = found.filter(dsTracked), nSent = tracked.filter(dsSent).length, ds = q.ds || '';
+    const shown = ds === 'no' ? tracked.filter(b => !dsSent(b)) : ds === 'yes' ? found.filter(dsSent) : found;
+    const dsLink = v => `#/sales?day=${day}${q.q ? '&q=' + encodeURIComponent(q.q) : ''}${v ? '&ds=' + v : ''}`;
+    const dsChips = tracked.length ? `<div class="chips">${[['', `All ${found.length}`], ['no', `⏳ Not sent ${tracked.length - nSent}`], ['yes', `🚚 Sent ${nSent}`]].map(([v, l]) => `<a class="chip ${ds === v ? 'on' : ''}" href="${dsLink(v)}">${l}</a>`).join('')}</div>` : '';
     const pd = hasLines() ? prodAgg(day, day).sort((a, b) => b.a - a.a) : [];
     const byUser = rows.reduce((m, b) => { const k = user(b.u) || '—'; m[k] = (m[k] || 0) + b.a; return m; }, {});
     frame('Sales', `${tabsHtml(T, tab)}${dayPicker('#/sales', day)}
@@ -519,11 +524,11 @@ function sales(q) {
         ${kpi('Same day last week', short(I.daySales.get(addD(day, -7)) || 0), pctTag(pct(sum(rows), I.daySales.get(addD(day, -7)) || 0)))}${kpi('Discount + scheme', short(sum(rows, b => (b.disc || 0) + (b.sch || 0))))}${kpi('Products', num(pd.length), `${num(sum(pd, x => x.q))} qty + ${num(sum(pd, x => x.f))} free`)}</div>
       ${pd.length ? `<details class="card"><summary><b>Products sold this day</b> <span class="muted">${pd.length}</span></summary>${pd.map(x => prodRow(x)).join('')}</details>` : ''}
       ${Object.keys(byUser).length > 1 ? `<details class="card"><summary><b>By FAWin user</b></summary>${Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><span class="m">${esc(k)}</span><span class="r">${short(v)}</span></div>`).join('')}</details>` : ''}
-      <div class="filters"><input data-q placeholder="Search bill no., party or product" value="${esc(q.q || '')}"></div>
+      <div class="filters"><input data-q placeholder="Search bill no., party or product" value="${esc(q.q || '')}"></div>${dsChips}
       <div class="card"><h3><span>${shown.length} bills</span><span>tap a bill to see its products</span></h3><div class="list" data-list></div></div>`, '#/sales');
     wireTabs('#/sales');
     $('[data-day]').onchange = e => { location.hash = `#/sales?day=${e.target.value}`; };
-    $('[data-q]').onchange = e => { location.hash = `#/sales?day=${day}&q=${encodeURIComponent(e.target.value)}`; };
+    $('[data-q]').onchange = e => { location.hash = `#/sales?day=${day}&q=${encodeURIComponent(e.target.value)}${ds ? '&ds=' + ds : ''}`; };
     more($('[data-list]'), shown, b => billDetails(b), 40);
     return;
   }
@@ -576,9 +581,14 @@ function sales(q) {
   wireTabs('#/sales', `&s=${P.k}`);
   more($('[data-list]'), rows, x => `<a class="row" href="#/party/${x.p.id}?tab=bills"><span class="m"><b>${esc(x.p.name)}</b><small>${esc([x.p.track, x.p.city].filter(Boolean).join(' · '))}${x.p.abc ? ' · ' + esc(x.p.abc) : ''}</small></span><span class="r">${short(x.a)}<div class="small">${P.pfrom ? pctTag(x.ch) : ''}</div></span></a>`);
 }
+// dispatch: b.x = [date, how] sent, 'c' went with its challan; none = not sent (only for bills from ds_since, the
+// first Send goods entry in AM — older bills went before dispatch was recorded, and older data has no ds_since)
+const dsTracked = b => !!(b.x || (S.data.ds_since && b.d >= S.data.ds_since));
+const dsSent = b => !!b.x;
+const dsTag = (b, short) => b.x === 'c' ? '<span class="tag g">🚚 with challan</span>' : Array.isArray(b.x) ? `<span class="tag g">🚚 ${short ? dmy(b.x[0]).slice(0, 5) : dmy(b.x[0]) + ' · ' + esc(b.x[1])}</span>` : dsTracked(b) ? '<span class="tag a">⏳ Not sent</span>' : '';
 function billDetails(b) {
   const p = S.idx.p.get(b.p), ls2 = S.idx.lByBill.get(b.id) || [];
-  return `<details class="bill"><summary class="row"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · ${dmy(b.d)}${b.u ? ' · ' + esc(user(b.u)) : ''}${ls2.length ? ` · ${ls2.length} items` : ''}</small></span><span class="r">${money(b.a)}</span></summary>
+  return `<details class="bill"><summary class="row"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · ${dmy(b.d)}${b.u ? ' · ' + esc(user(b.u)) : ''}${ls2.length ? ` · ${ls2.length} items` : ''}</small>${dsTracked(b) ? `<small>${dsTag(b)}</small>` : ''}</span><span class="r">${money(b.a)}</span></summary>
     ${ls2.length ? `<div class="tw"><table><thead><tr><th>Product</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead><tbody>${ls2.map(l => `<tr><td>${l[3] ? `<a href="#/product/${l[3]}">${esc(pname(l))}</a>` : esc(pname(l))}</td><td class="n">${num(l[4])}${l[5] ? '+' + num(l[5]) : ''}</td><td class="n">${num(l[6])}</td><td class="n">${money(l[7])}</td></tr>`).join('')}</tbody></table></div>` : `<div class="muted small">${hasLines() ? 'No product lines for this bill' : 'Product lines need the latest ERP version'}</div>`}
     ${b.disc || b.sch ? `<div class="muted small">Discount ${money(b.disc)} · scheme ${money(b.sch)}</div>` : ''}<div class="actions" style="margin:6px 0"><a class="btn ghost sm" href="#/party/${b.p}?tab=bills">Party →</a></div></details>`;
 }
