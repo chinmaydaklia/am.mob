@@ -525,6 +525,7 @@ function sales(q) {
       ${pd.length ? `<details class="card"><summary><b>Products sold this day</b> <span class="muted">${pd.length}</span></summary>${pd.map(x => prodRow(x)).join('')}</details>` : ''}
       ${Object.keys(byUser).length > 1 ? `<details class="card"><summary><b>By FAWin user</b></summary>${Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><span class="m">${esc(k)}</span><span class="r">${short(v)}</span></div>`).join('')}</details>` : ''}
       <div class="filters"><input data-q placeholder="Search bill no., party or product" value="${esc(q.q || '')}"></div>${dsChips}
+      ${'ds_since' in d ? '' : '<div class="alert b small">🚚 Sent / not sent shows here from the next data email of the updated AM — tap ⟳ (Get latest from Gmail) after it arrives.</div>'}
       <div class="card"><h3><span>${shown.length} bills</span><span>tap a bill to see its products</span></h3><div class="list" data-list></div></div>`, '#/sales');
     wireTabs('#/sales');
     $('[data-day]').onchange = e => { location.hash = `#/sales?day=${e.target.value}`; };
