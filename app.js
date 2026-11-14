@@ -959,8 +959,40 @@ function reports() {
     <div class="card"><h3>Ageing of outstanding</h3>${['0-30', '31-60', '61-90', '90+'].map(k => { const [a, b] = AGES[k]; const rows = d.open.filter(o => o.k === 's' && o.age >= a && o.age <= b); return `<a class="row" href="#/due?age=${k}"><span class="m">${k} days<small> ${rows.length} bills</small></span><span class="r">${short(sum(rows, o => o.b))}</span></a>`; }).join('')}</div>
     <div class="card"><h3>Sales by FAWin user (FY)</h3>${Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><span class="m">${esc(k)}</span><span class="r">${short(v)}</span></div>`).join('')}</div>`, '#/more');
 }
+// ───────────── cash book and bank book (this FY, as AM shows them) ─────────────
+// a day, or the whole month of that day; opening = the FY opening + every entry before; an AM bank entry matched with
+// FAWin is counted once (AM leaves it out of the bank book, as on the PC)
+function moneyPage(q) {
+  const d = S.data, M = d.money;
+  if (!M) return frame('Cash & bank', '<div class="alert b">The cash book and bank books come with the next data email from the updated AM — tap ⟳ after it arrives.</div>', '#/more');
+  const tab = q.tab === 'bank' && M.banks.length ? 'bank' : 'cash';
+  // the account asked for, else the busiest one (most entries this year)
+  const acct = tab === 'bank' ? (M.banks.find(b => String(b.id) === q.a) || [...M.banks].sort((x, y) => y.rows.length - x.rows.length)[0]) : null;
+  const book = tab === 'bank' ? acct : M.cash;
+  const day = q.day || d.today, month = q.span === 'month';
+  const from = month ? day.slice(0, 8) + '01' : day, to = month ? (day.slice(0, 7) === d.today.slice(0, 7) ? d.today : addD(addD(day.slice(0, 8) + '01', 32).slice(0, 8) + '01', -1)) : day;
+  const open = book.open + sum(book.rows.filter(r => r[0] < from), r => r[3]);
+  const rows = book.rows.filter(r => r[0] >= from && r[0] <= to);
+  const tin = sum(rows.filter(r => r[3] > 0), r => r[3]), tout = -sum(rows.filter(r => r[3] < 0), r => r[3]);
+  let bal = open; const lines = rows.map(r => { bal += r[3]; return { r, bal }; }).reverse(); // newest first
+  const extra = `&tab=${tab}${acct ? '&a=' + acct.id : ''}${month ? '&span=month' : ''}`;
+  const bal0 = b => b.open + sum(b.rows.filter(r => r[0] <= to), r => r[3]);
+  const ent = n => `${n} ${n === 1 ? 'entry' : 'entries'}`;
+  frame('Cash & bank', `${tabsHtml([['cash', '💵 Cash book'], ['bank', '🏦 Bank book']], tab)}
+    ${tab === 'bank' ? (M.banks.length ? `<div class="chips">${M.banks.map(b => `<a class="chip ${b === acct ? 'on' : ''}" href="#/money?tab=bank&a=${b.id}&day=${day}${month ? '&span=month' : ''}">${esc(b.name)} <span class="muted">${short(bal0(b))}</span></a>`).join('')}</div>` : '<div class="alert b">No bank accounts in AM</div>') : ''}
+    ${dayPicker('#/money', day, extra)}
+    <div class="chips"><a class="chip ${month ? '' : 'on'}" href="#/money?day=${day}${extra.replace('&span=month', '')}">This day</a><a class="chip ${month ? 'on' : ''}" href="#/money?day=${day}${extra.replace('&span=month', '')}&span=month">Whole month</a></div>
+    ${from < M.from ? `<div class="alert b small">The phone has entries from ${dmy(M.from)} (this financial year).</div>` : ''}
+    <div class="kpis" style="margin-bottom:8px">${kpi('Opening', short(open), dmy(from))}${kpi('Money in', short(tin), ent(rows.filter(r => r[3] > 0).length), 'g')}${kpi('Money out', short(tout), ent(rows.filter(r => r[3] < 0).length), 'r')}${kpi('Closing', short(open + tin - tout), dmy(to), 'b')}</div>
+    <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, '#/more');
+  wireTabs('#/money', `&day=${day}${month ? '&span=month' : ''}`);
+  $('[data-day]').onchange = e => { location.hash = `#/money?day=${e.target.value}${extra}`; };
+  const L = $('[data-list]');
+  if (!lines.length) { L.innerHTML = '<div class="muted">No entries</div>'; return; }
+  more(L, lines, ({ r, bal: b }) => `<div class="row"><span class="m"><b>${esc(r[1])}</b><small>${month ? dmy(r[0]) + ' · ' : ''}${esc(r[2] || '')}${r[4] === 'F' ? ' · <span class="muted">FAWin</span>' : ''}</small></span><span class="r"><b class="${r[3] < 0 ? 'red' : 'green'}">${r[3] < 0 ? '−' : '+'}${money(Math.abs(r[3]))}</b><small class="muted" style="display:block">bal ${short(b)}</small></span></div>`, 50);
+}
 function moreMenu() {
-  frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (bill / day / month)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
+  frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (bill / day / month)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/money', '💵 Cash book & bank book'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
 }
 async function archive(q) {
   frame('Older reports', `<div class="filters"><input type="date" data-from value="${esc(q.from || '')}"><input type="date" data-to value="${esc(q.to || '')}"><select data-k><option value="">All</option><option value="daily" ${q.k === 'daily' ? 'selected' : ''}>Daily reports (8 PM)</option></select><button class="btn sm" data-go>Search Gmail</button></div>
@@ -1058,7 +1090,7 @@ function route() {
   if (m) return party(m[1], q);
   const mp = path.match(/^\/product\/(\d+)$/);
   if (mp) return product(mp[1], q);
-  ({ '/home': home, '/parties': parties, '/due': due, '/tracks': tracks, '/sales': sales, '/receipts': collect, '/collect': collect, '/order': order, '/profit': profit, '/purchases': purchases, '/stock': stock, '/edits': edits, '/reports': reports, '/more': moreMenu, '/archive': archive }[path] || home)(q);
+  ({ '/home': home, '/parties': parties, '/due': due, '/tracks': tracks, '/sales': sales, '/receipts': collect, '/collect': collect, '/order': order, '/profit': profit, '/purchases': purchases, '/stock': stock, '/edits': edits, '/reports': reports, '/more': moreMenu, '/money': moneyPage, '/archive': archive }[path] || home)(q);
 }
 async function start() {
   const file = ls.get(LS.file);
