@@ -275,33 +275,72 @@ const notesCard = (r, label) => !S.data.cn ? '' : `<div class="card"><h3>After c
   ${r.s ? `<div class="row"><span class="m">+ Purchase cost cut by supplier expiry credit<small>credit notes from suppliers, taken off their bills</small></span><span class="r green">${short(r.s)}</span></div>
   <div class="row"><span class="m">− Your own expired stock sent back<small>what it cost you; goods parties returned are not counted again</small></span><span class="r red">${short(r.own)}</span></div>` : ''}
   <div class="row"><span class="m"><b>= Profit after credit notes</b></span><span class="r"><b>${netTxt(r)}</b></span></div></div>`;
+// ───────────── profit after costs: party-wise and track-wise ─────────────
+// each party in the period: its bills' profit, freight paid at booking, credit notes / returns (a sales return loses only
+// its profit, at the party's margin), collection, how long it takes to pay (this year), what it owes now
+function costRows(P) {
+  const d = S.data, m = new Map();
+  const get = pid => m.get(pid) || m.set(pid, { pid, bills: [], fr: 0, g: 0, o: 0, r: 0, col: 0 }).get(pid);
+  for (const b of d.bills) if (b.s !== undefined && b.d >= P.from && b.d <= P.to) get(b.p).bills.push(b);
+  for (const [dt, pid, a] of d.pfr || []) if (dt >= P.from && dt <= P.to) get(pid).fr += a;
+  for (const [dt, pid, k, v] of d.pcn || []) if (dt >= P.from && dt <= P.to && pid) get(pid)[k] += v;
+  const all = pf(d.bills.filter(b => b.s !== undefined && b.d >= P.from && b.d <= P.to)), avg = all.sale ? all.profit / all.sale : 0;
+  return [...m.values()].filter(x => x.bills.length || x.fr || x.g || x.o || x.r).map(x => {
+    const p = S.idx.p.get(x.pid), pr = pf(x.bills), margin = pr.sale ? pr.profit / pr.sale : avg;
+    const ret = x.g + x.o + x.r * margin, after = pr.profit - x.fr - ret, pd = (d.pd || {})[x.pid];
+    return { ...x, name: p?.name || '(party)', city: p?.city || '', track: p?.track || '', due: p?.due || 0, pr, ret, ex: 0, after, pct: pr.sale ? after / pr.sale * 100 : null, days: pd ? pd[0] : null, damt: pd ? pd[1] : 0 };
+  });
+}
+// the same added up per track, less the track's own expenses (fuel, staff, vehicle entered with the track)
+function trackRows(parties, P) {
+  const m = new Map();
+  for (const x of parties) {
+    const k = x.track || '(no track)';
+    const t = m.get(k) || m.set(k, { name: k, n: 0, bills: [], fr: 0, ret: 0, ex: 0, due: 0, dw: 0, da: 0 }).get(k);
+    t.n++; t.bills.push(...x.bills); t.fr += x.fr; t.ret += x.ret; t.due += x.due; if (x.days !== null) { t.dw += x.days * x.damt; t.da += x.damt; }
+  }
+  for (const [dt, tr, a] of S.data.tx || []) if (dt >= P.from && dt <= P.to) { const t = m.get(tr || '(no track)') || m.set(tr, { name: tr, n: 0, bills: [], fr: 0, ret: 0, ex: 0, due: 0, dw: 0, da: 0 }).get(tr); t.ex += a; }
+  return [...m.values()].map(t => { const pr = pf(t.bills), after = pr.profit - t.fr - t.ret - t.ex; return { ...t, pr, after, pct: pr.sale ? after / pr.sale * 100 : null, days: t.da ? Math.round(t.dw / t.da) : null }; });
+}
 function profit(q) {
   const d = S.data, tab = q.tab || 'day';
-  const T = [['party', 'Party-wise'], ['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
+  const T = [['party', 'Party-wise'], ['track', 'Track-wise'], ['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
   if (!hasProfit()) { frame('Profit', NOLINES, '#/profit?tab=party'); return; }
   const withP = d.bills.filter(b => b.s !== undefined);
   const note = '<div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted. The same figure as the ERP\'s profit reports.</div>';
-  if (tab === 'party') {
-    // which party made how much: profit of its bills in the period (sale value before GST − purchase cost)
+  if (tab === 'party' || tab === 'track') {
+    // profit after costs (owner): profit of the bills − freight paid at booking − credit notes / returns (a sales return
+    // loses only its profit, at the party's margin) − track expenses (fuel, staff, vehicle entered with a track)
     const P = span(q.s || 'month', q.m);
-    const m = new Map();
-    for (const b of withP) { if (b.d < P.from || b.d > P.to) continue; (m.get(b.p) || m.set(b.p, []).get(b.p)).push(b); }
-    const all = [...m].map(([pid, l]) => { const p = S.idx.p.get(pid); return { pid, name: p?.name || '(party)', city: p?.city || '', x: pf(l) }; });
-    const so = q.sort || 'high';
-    frame('Profit', `${tabsHtml(T, tab)}${spanChips('#/profit?tab=party', P.k)}
-      <div class="filters"><input data-q placeholder="Find party"><select data-sort>${[['high', 'Most profit first'], ['loss', 'Loss / least profit first'], ['pct', 'Highest margin %'], ['lowpct', 'Lowest margin %'], ['sale', 'Highest sale']].map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-      <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>${note}`, '#/profit?tab=party');
+    const C = costRows(P);
+    const has = !!d.pfr;
+    const so = q.sort || 'after';
+    const SORTS = [['after', 'Most profit after costs'], ['loss', 'Loss / least first'], ['pct', 'Lowest margin after costs'], ['sale', 'Highest sale'], ['slow', 'Slowest to pay']];
+    const cmp = { after: (a, b) => b.after - a.after, loss: (a, b) => a.after - b.after, pct: (a, b) => (a.pct ?? 1e9) - (b.pct ?? 1e9), sale: (a, b) => b.pr.sale - a.pr.sale, slow: (a, b) => (b.days ?? -1) - (a.days ?? -1) };
+    const costTxt = x => [x.fr ? `freight −${short(x.fr)}` : '', x.ret ? `returns −${short(x.ret)}` : '', x.ex ? `track exp. −${short(x.ex)}` : ''].filter(Boolean).join(' · ');
+    const payTxt = x => [x.days !== null && x.days !== undefined ? `pays in ${x.days} days` : '', x.due > 0.5 ? `due ${short(x.due)}` : ''].filter(Boolean).join(' · ');
+    const after = x => `<b class="${x.after < 0 ? 'red' : 'green'}">${short(x.after)}</b>${x.pct !== null ? ` <span class="muted small">${x.pct.toFixed(1)}%</span>` : ''}`;
+    const kpis = rows => { const t = { sale: sum(rows, x => x.pr.sale), profit: sum(rows, x => x.pr.profit), fr: sum(rows, x => x.fr), ret: sum(rows, x => x.ret), ex: sum(rows, x => x.ex || 0) }; const a = t.profit - t.fr - t.ret - t.ex;
+      return `${kpi('Profit after costs', `<b class="${a < 0 ? 'red' : 'green'}">${short(a)}</b>${t.sale ? ` <span class="muted small">${(a / t.sale * 100).toFixed(1)}%</span>` : ''}`, `${P.label}`, a < 0 ? 'r' : 'g')}${kpi('Profit on bills', short(t.profit), `sale ${short(t.sale)} before GST`)}
+        ${kpi('Freight', short(t.fr), 'paid at booking', 'r')}${kpi('Returns / credit', short(t.ret), 'profit lost', 'r')}${tab === 'track' ? kpi('Track expenses', short(t.ex), 'fuel, staff, vehicle', 'r') : ''}`; };
+    let rows = tab === 'track' ? trackRows(C, P) : C;
+    if (tab === 'party' && q.tr) rows = rows.filter(x => x.track === q.tr);
+    frame('Profit', `${tabsHtml(T, tab)}${spanChips(`#/profit?tab=${tab}${q.tr ? '&tr=' + encodeURIComponent(q.tr) : ''}`, P.k)}
+      ${q.tr && tab === 'party' ? `<div class="chips"><a class="chip on" href="#/profit?tab=party&s=${P.k}">Track: ${esc(q.tr)} ✕</a></div>` : ''}
+      ${has ? '' : '<div class="alert b small">Freight, returns and track expenses come with the next data email from the updated AM — tap ⟳ after it arrives. Profit on bills shows now.</div>'}
+      <div class="filters"><input data-q placeholder="Find ${tab === 'track' ? 'track' : 'party'}"><select data-sort>${SORTS.map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>
+      <div class="muted small" style="margin:6px 2px">Profit after costs = profit on bills (sale before GST − purchase cost) − freight paid at booking − credit notes and returns (a sales return loses only its profit)${tab === 'track' ? ' − track expenses entered with the track (fuel, staff, vehicle)' : ''}. "Pays in" = average days from bill to payment this year.</div>`, '#/profit?tab=party');
     wireTabs('#/profit');
     const draw = () => {
       const t = $('[data-q]').value.trim().toLowerCase(), o = $('[data-sort]').value;
-      const rows = all.filter(x => !t || (x.name + ' ' + x.city).toLowerCase().includes(t));
-      rows.sort({ high: (a, b) => b.x.profit - a.x.profit, loss: (a, b) => a.x.profit - b.x.profit, pct: (a, b) => (b.x.pct ?? -1e9) - (a.x.pct ?? -1e9), lowpct: (a, b) => (a.x.pct ?? 1e9) - (b.x.pct ?? 1e9), sale: (a, b) => b.x.sale - a.x.sale }[o]);
-      const tot = pf(rows.flatMap(x => m.get(x.pid)));
-      const loss = rows.filter(x => x.x.profit < 0);
-      $('[data-k]').innerHTML = `${kpi('Profit', pfTxt(tot), `${rows.length} parties · ${P.label}`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Parties at a loss', num(loss.length), loss.length ? short(sum(loss, x => x.x.profit)) : '', loss.length ? 'r' : '')}`;
-      $('[data-h]').innerHTML = `<span>${rows.length} parties</span><span>${dmy(P.from)} – ${dmy(P.to)}</span>`;
-      more($('[data-list]'), rows, x => `<a class="row" href="#/party/${x.pid}"><span class="m"><b>${esc(x.name)}</b><small>${esc(x.city)}${x.city ? ' · ' : ''}${x.x.n} bills · sale ${short(x.x.sale)}</small></span><span class="r ${x.x.profit < 0 ? 'red' : ''}">${pfTxt(x.x)}</span></a>`);
-      history.replaceState(null, '', `#/profit?tab=party&s=${P.k}${q.m ? '&m=' + q.m : ''}&sort=${o}`);
+      const list = rows.filter(x => !t || (x.name + ' ' + (x.city || '') + ' ' + (x.track || '')).toLowerCase().includes(t)).sort(cmp[o]);
+      $('[data-k]').innerHTML = kpis(list);
+      $('[data-h]').innerHTML = `<span>${list.length} ${tab === 'track' ? 'tracks' : 'parties'}</span><span>${dmy(P.from)} – ${dmy(P.to)}</span>`;
+      more($('[data-list]'), list, x => tab === 'track'
+        ? `<a class="row" href="#/profit?tab=party&s=${P.k}${q.m ? '&m=' + q.m : ''}&tr=${encodeURIComponent(x.name)}"><span class="m"><b>${esc(x.name)}</b><small>${x.n} parties · sale ${short(x.pr.sale)} · profit ${short(x.pr.profit)}${costTxt(x) ? ' · ' + costTxt(x) : ''}${payTxt(x) ? '<br>' + payTxt(x) : ''}</small></span><span class="r">${after(x)}</span></a>`
+        : `<a class="row" href="#/party/${x.pid}"><span class="m"><b>${esc(x.name)}</b><small>${esc([x.city, x.track].filter(Boolean).join(' · '))} · ${x.pr.n} bills · sale ${short(x.pr.sale)} · profit ${short(x.pr.profit)}${costTxt(x) ? '<br>' + costTxt(x) : ''}${payTxt(x) ? '<br>' + payTxt(x) : ''}</small></span><span class="r">${after(x)}</span></a>`);
+      history.replaceState(null, '', `#/profit?tab=${tab}&s=${P.k}${q.m ? '&m=' + q.m : ''}${q.tr ? '&tr=' + encodeURIComponent(q.tr) : ''}&sort=${o}`);
     };
     $('[data-q]').oninput = draw; $('[data-sort]').onchange = draw; draw();
     return;
@@ -1008,6 +1047,7 @@ function moneyPage(q) {
     ${dayPicker('#/money', day, extra)}
     <div class="chips"><a class="chip ${month ? '' : 'on'}" href="#/money?day=${day}${extra.replace('&span=month', '')}">This day</a><a class="chip ${month ? 'on' : ''}" href="#/money?day=${day}${extra.replace('&span=month', '')}&span=month">Whole month</a></div>
     ${from < M.from ? `<div class="alert b small">The phone has entries from ${dmy(M.from)} (this financial year).</div>` : ''}
+    ${book.start && to < book.start ? `<div class="alert b">This ${tab === 'bank' ? 'bank book' : 'cash book'} started on <b>${dmy(book.start)}</b>: earlier days are not counted. <a href="#/money?day=${book.start}${extra}">Go to ${dmy(book.start)}</a></div>` : book.start && from < book.start ? `<div class="alert b small">Started on ${dmy(book.start)} — counted from that day.</div>` : ''}
     <div class="kpis" style="margin-bottom:8px">${kpi('Opening', short(open), dmy(from))}${kpi('Money in', short(tin), ent(rows.filter(r => r[3] > 0).length), 'g')}${kpi('Money out', short(tout), ent(rows.filter(r => r[3] < 0).length), 'r')}${kpi('Closing', short(open + tin - tout), dmy(to), 'b')}</div>
     <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, tab === 'bank' ? '#/money?tab=bank' : '#/money?tab=cash');
   wireTabs('#/money', `&day=${day}${month ? '&span=month' : ''}`);
