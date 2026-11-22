@@ -156,11 +156,11 @@ const mgTxt = x => (x.mg === null ? '' : `<span class="${x.mg < 0 ? 'red' : 'mut
 const bars = (rows, f = short) => { const max = Math.max(1, ...rows.map(r => r.v)); return `<div class="bars">${rows.map(r => `<div class="bar" title="${esc(r.label)}: ${esc(f(r.v))}"><i style="height:${Math.max(2, Math.round(r.v / max * 100))}%"></i><span>${esc(r.label)}</span></div>`).join('')}</div>`; };
 
 // ───────────── layout ─────────────
-const NAV = [['#/home', '🏠', 'Home'], ['#/sales', '🧾', 'Sales'], ['#/collect', '💰', 'Collect'], ['#/due', '📋', 'Dues'], ['#/order', '🛒', 'Order'], ['#/stock', '💊', 'Stock']];
+const NAV = [['#/sales', '🧾', 'Sales'], ['#/money?tab=cash', '💵', 'Cash book'], ['#/money?tab=bank', '🏦', 'Bank book'], ['#/due', '📋', 'Dues'], ['#/profit?tab=party', '💹', 'Party profit']];
 function frame(title, body, active) {
   const d = S.data, meta = JSON.parse(ls.get(LS.meta) || '{}');
   const ageH = d ? (Date.now() - new Date(String(d.generated_at).replace(' ', 'T')).getTime()) / 3600000 : 0;
-  app().innerHTML = `<div class="top"><h1>${esc(title)}</h1><button data-refresh title="Get the latest data from Gmail">⟳</button><a class="topbtn" href="#/more" title="Parties, tracks, purchases, reports, settings">☰</a></div>
+  app().innerHTML = `<div class="top"><h1>${esc(title)}</h1><a class="topbtn" href="#/home" title="Home">🏠</a><button data-refresh title="Get the latest data from Gmail">⟳</button><a class="topbtn" href="#/more" title="Parties, tracks, purchases, reports, settings">☰</a></div>
     ${d ? `<div class="asof ${ageH > 13 ? 'old' : ''}"><span>Data as of <b>${dmy(d.generated_at)} ${esc(String(d.generated_at).slice(11, 16))}</b>${d.fawin?.last_sync ? ` · FAWin sync ${esc(String(d.fawin.last_sync).slice(11, 16))}` : ''}</span><span>${meta.source === 'file' ? 'from file' : 'Gmail'}</span></div>` : ''}
     <main>${body}</main><nav class="nav">${NAV.map(([h, i, l]) => `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="i">${i}</span>${l}</a>`).join('')}</nav>`;
   $('[data-refresh]').onclick = e => refreshFromGmail(e.target);
@@ -277,10 +277,35 @@ const notesCard = (r, label) => !S.data.cn ? '' : `<div class="card"><h3>After c
   <div class="row"><span class="m"><b>= Profit after credit notes</b></span><span class="r"><b>${netTxt(r)}</b></span></div></div>`;
 function profit(q) {
   const d = S.data, tab = q.tab || 'day';
-  const T = [['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
-  if (!hasProfit()) { frame('Profit', NOLINES, '#/more'); return; }
+  const T = [['party', 'Party-wise'], ['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
+  if (!hasProfit()) { frame('Profit', NOLINES, '#/profit?tab=party'); return; }
   const withP = d.bills.filter(b => b.s !== undefined);
   const note = '<div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted. The same figure as the ERP\'s profit reports.</div>';
+  if (tab === 'party') {
+    // which party made how much: profit of its bills in the period (sale value before GST − purchase cost)
+    const P = span(q.s || 'month', q.m);
+    const m = new Map();
+    for (const b of withP) { if (b.d < P.from || b.d > P.to) continue; (m.get(b.p) || m.set(b.p, []).get(b.p)).push(b); }
+    const all = [...m].map(([pid, l]) => { const p = S.idx.p.get(pid); return { pid, name: p?.name || '(party)', city: p?.city || '', x: pf(l) }; });
+    const so = q.sort || 'high';
+    frame('Profit', `${tabsHtml(T, tab)}${spanChips('#/profit?tab=party', P.k)}
+      <div class="filters"><input data-q placeholder="Find party"><select data-sort>${[['high', 'Most profit first'], ['loss', 'Loss / least profit first'], ['pct', 'Highest margin %'], ['lowpct', 'Lowest margin %'], ['sale', 'Highest sale']].map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>${note}`, '#/profit?tab=party');
+    wireTabs('#/profit');
+    const draw = () => {
+      const t = $('[data-q]').value.trim().toLowerCase(), o = $('[data-sort]').value;
+      const rows = all.filter(x => !t || (x.name + ' ' + x.city).toLowerCase().includes(t));
+      rows.sort({ high: (a, b) => b.x.profit - a.x.profit, loss: (a, b) => a.x.profit - b.x.profit, pct: (a, b) => (b.x.pct ?? -1e9) - (a.x.pct ?? -1e9), lowpct: (a, b) => (a.x.pct ?? 1e9) - (b.x.pct ?? 1e9), sale: (a, b) => b.x.sale - a.x.sale }[o]);
+      const tot = pf(rows.flatMap(x => m.get(x.pid)));
+      const loss = rows.filter(x => x.x.profit < 0);
+      $('[data-k]').innerHTML = `${kpi('Profit', pfTxt(tot), `${rows.length} parties · ${P.label}`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Parties at a loss', num(loss.length), loss.length ? short(sum(loss, x => x.x.profit)) : '', loss.length ? 'r' : '')}`;
+      $('[data-h]').innerHTML = `<span>${rows.length} parties</span><span>${dmy(P.from)} – ${dmy(P.to)}</span>`;
+      more($('[data-list]'), rows, x => `<a class="row" href="#/party/${x.pid}"><span class="m"><b>${esc(x.name)}</b><small>${esc(x.city)}${x.city ? ' · ' : ''}${x.x.n} bills · sale ${short(x.x.sale)}</small></span><span class="r ${x.x.profit < 0 ? 'red' : ''}">${pfTxt(x.x)}</span></a>`);
+      history.replaceState(null, '', `#/profit?tab=party&s=${P.k}${q.m ? '&m=' + q.m : ''}&sort=${o}`);
+    };
+    $('[data-q]').oninput = draw; $('[data-sort]').onchange = draw; draw();
+    return;
+  }
   if (tab === 'product') {
     // which product (or company) made how much: net sale value − purchase cost of each line, as in the ERP
     if (!hasLineCost()) { frame('Profit', tabsHtml(T, tab) + NOLINES, '#/more'); return wireTabs('#/profit'); }
@@ -984,7 +1009,7 @@ function moneyPage(q) {
     <div class="chips"><a class="chip ${month ? '' : 'on'}" href="#/money?day=${day}${extra.replace('&span=month', '')}">This day</a><a class="chip ${month ? 'on' : ''}" href="#/money?day=${day}${extra.replace('&span=month', '')}&span=month">Whole month</a></div>
     ${from < M.from ? `<div class="alert b small">The phone has entries from ${dmy(M.from)} (this financial year).</div>` : ''}
     <div class="kpis" style="margin-bottom:8px">${kpi('Opening', short(open), dmy(from))}${kpi('Money in', short(tin), ent(rows.filter(r => r[3] > 0).length), 'g')}${kpi('Money out', short(tout), ent(rows.filter(r => r[3] < 0).length), 'r')}${kpi('Closing', short(open + tin - tout), dmy(to), 'b')}</div>
-    <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, '#/more');
+    <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, tab === 'bank' ? '#/money?tab=bank' : '#/money?tab=cash');
   wireTabs('#/money', `&day=${day}${month ? '&span=month' : ''}`);
   $('[data-day]').onchange = e => { location.hash = `#/money?day=${e.target.value}${extra}`; };
   const L = $('[data-list]');
@@ -992,7 +1017,7 @@ function moneyPage(q) {
   more(L, lines, ({ r, bal: b }) => `<div class="row"><span class="m"><b>${esc(r[1])}</b><small>${month ? dmy(r[0]) + ' · ' : ''}${esc(r[2] || '')}${r[4] === 'F' ? ' · <span class="muted">FAWin</span>' : ''}</small></span><span class="r"><b class="${r[3] < 0 ? 'red' : 'green'}">${r[3] < 0 ? '−' : '+'}${money(Math.abs(r[3]))}</b><small class="muted" style="display:block">bal ${short(b)}</small></span></div>`, 50);
 }
 function moreMenu() {
-  frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (bill / day / month)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/money', '💵 Cash book & bank book'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
+  frame('More', `<div class="card menu">${[['#/home', '🏠 Home'], ['#/collect', '💰 Collection'], ['#/order', '🛒 Order'], ['#/stock', '💊 Stock'], ['#/profit?tab=day', '💹 Profit (bill / day / month / product)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
 }
 async function archive(q) {
   frame('Older reports', `<div class="filters"><input type="date" data-from value="${esc(q.from || '')}"><input type="date" data-to value="${esc(q.to || '')}"><select data-k><option value="">All</option><option value="daily" ${q.k === 'daily' ? 'selected' : ''}>Daily reports (8 PM)</option></select><button class="btn sm" data-go>Search Gmail</button></div>
