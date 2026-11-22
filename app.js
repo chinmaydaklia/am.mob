@@ -156,7 +156,7 @@ const mgTxt = x => (x.mg === null ? '' : `<span class="${x.mg < 0 ? 'red' : 'mut
 const bars = (rows, f = short) => { const max = Math.max(1, ...rows.map(r => r.v)); return `<div class="bars">${rows.map(r => `<div class="bar" title="${esc(r.label)}: ${esc(f(r.v))}"><i style="height:${Math.max(2, Math.round(r.v / max * 100))}%"></i><span>${esc(r.label)}</span></div>`).join('')}</div>`; };
 
 // ───────────── layout ─────────────
-const NAV = [['#/home', '🏠', 'Home'], ['#/sales', '🧾', 'Sales'], ['#/money', '💵', 'Cash & bank'], ['#/profit', '💹', 'Profit'], ['#/due', '📋', 'Dues']];
+const NAV = [['#/home', '🏠', 'Home'], ['#/sales', '🧾', 'Sales'], ['#/money', '💵', 'Cash & bank'], ['#/order', '🛒', 'Order'], ['#/due', '📋', 'Dues']];
 function frame(title, body, active) {
   const d = S.data, meta = JSON.parse(ls.get(LS.meta) || '{}');
   const ageH = d ? (Date.now() - new Date(String(d.generated_at).replace(' ', 'T')).getTime()) / 3600000 : 0;
@@ -1057,7 +1057,7 @@ function moneyPage(q) {
   more(L, lines, ({ r, bal: b }) => `<div class="row"><span class="m"><b>${esc(r[1])}</b><small>${month ? dmy(r[0]) + ' · ' : ''}${esc(r[2] || '')}${r[4] === 'F' ? ' · <span class="muted">FAWin</span>' : ''}</small></span><span class="r"><b class="${r[3] < 0 ? 'red' : 'green'}">${r[3] < 0 ? '−' : '+'}${money(Math.abs(r[3]))}</b><small class="muted" style="display:block">bal ${short(b)}</small></span></div>`, 50);
 }
 function moreMenu() {
-  frame('More', `<div class="card menu">${[['#/collect', '💰 Collection'], ['#/order', '🛒 Order'], ['#/stock', '💊 Stock'], ['#/profit?tab=day', '💹 Profit (bill / day / month / product)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
+  frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (party / track / bill / day / month / product)'], ['#/collect', '💰 Collection'], ['#/stock', '💊 Stock'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
 }
 async function archive(q) {
   frame('Older reports', `<div class="filters"><input type="date" data-from value="${esc(q.from || '')}"><input type="date" data-to value="${esc(q.to || '')}"><select data-k><option value="">All</option><option value="daily" ${q.k === 'daily' ? 'selected' : ''}>Daily reports (8 PM)</option></select><button class="btn sm" data-go>Search Gmail</button></div>
