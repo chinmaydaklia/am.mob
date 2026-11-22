@@ -156,11 +156,11 @@ const mgTxt = x => (x.mg === null ? '' : `<span class="${x.mg < 0 ? 'red' : 'mut
 const bars = (rows, f = short) => { const max = Math.max(1, ...rows.map(r => r.v)); return `<div class="bars">${rows.map(r => `<div class="bar" title="${esc(r.label)}: ${esc(f(r.v))}"><i style="height:${Math.max(2, Math.round(r.v / max * 100))}%"></i><span>${esc(r.label)}</span></div>`).join('')}</div>`; };
 
 // ───────────── layout ─────────────
-const NAV = [['#/sales', '🧾', 'Sales'], ['#/money?tab=cash', '💵', 'Cash book'], ['#/money?tab=bank', '🏦', 'Bank book'], ['#/due', '📋', 'Dues'], ['#/profit?tab=party', '💹', 'Party profit']];
+const NAV = [['#/home', '🏠', 'Home'], ['#/sales', '🧾', 'Sales'], ['#/money', '💵', 'Cash & bank'], ['#/profit', '💹', 'Profit'], ['#/due', '📋', 'Dues']];
 function frame(title, body, active) {
   const d = S.data, meta = JSON.parse(ls.get(LS.meta) || '{}');
   const ageH = d ? (Date.now() - new Date(String(d.generated_at).replace(' ', 'T')).getTime()) / 3600000 : 0;
-  app().innerHTML = `<div class="top"><h1>${esc(title)}</h1><a class="topbtn" href="#/home" title="Home">🏠</a><button data-refresh title="Get the latest data from Gmail">⟳</button><a class="topbtn" href="#/more" title="Parties, tracks, purchases, reports, settings">☰</a></div>
+  app().innerHTML = `<div class="top"><h1>${esc(title)}</h1><button data-refresh title="Get the latest data from Gmail">⟳</button><a class="topbtn" href="#/more" title="Parties, tracks, purchases, reports, settings">☰</a></div>
     ${d ? `<div class="asof ${ageH > 13 ? 'old' : ''}"><span>Data as of <b>${dmy(d.generated_at)} ${esc(String(d.generated_at).slice(11, 16))}</b>${d.fawin?.last_sync ? ` · FAWin sync ${esc(String(d.fawin.last_sync).slice(11, 16))}` : ''}</span><span>${meta.source === 'file' ? 'from file' : 'Gmail'}</span></div>` : ''}
     <main>${body}</main><nav class="nav">${NAV.map(([h, i, l]) => `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="i">${i}</span>${l}</a>`).join('')}</nav>`;
   $('[data-refresh]').onclick = e => refreshFromGmail(e.target);
@@ -303,9 +303,9 @@ function trackRows(parties, P) {
   return [...m.values()].map(t => { const pr = pf(t.bills), after = pr.profit - t.fr - t.ret - t.ex; return { ...t, pr, after, pct: pr.sale ? after / pr.sale * 100 : null, days: t.da ? Math.round(t.dw / t.da) : null }; });
 }
 function profit(q) {
-  const d = S.data, tab = q.tab || 'day';
+  const d = S.data, tab = q.tab || 'party';
   const T = [['party', 'Party-wise'], ['track', 'Track-wise'], ['bill', 'Bill-wise'], ['day', 'Day-wise'], ['month', 'Month-wise'], ['product', 'Product-wise']];
-  if (!hasProfit()) { frame('Profit', NOLINES, '#/profit?tab=party'); return; }
+  if (!hasProfit()) { frame('Profit', NOLINES, '#/profit'); return; }
   const withP = d.bills.filter(b => b.s !== undefined);
   const note = '<div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted. The same figure as the ERP\'s profit reports.</div>';
   if (tab === 'party' || tab === 'track') {
@@ -330,7 +330,7 @@ function profit(q) {
       ${has ? '' : '<div class="alert b small">Freight, returns and track expenses come with the next data email from the updated AM — tap ⟳ after it arrives. Profit on bills shows now.</div>'}
       <div class="filters"><input data-q placeholder="Find ${tab === 'track' ? 'track' : 'party'}"><select data-sort>${SORTS.map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>
-      <div class="muted small" style="margin:6px 2px">Profit after costs = profit on bills (sale before GST − purchase cost) − freight paid at booking − credit notes and returns (a sales return loses only its profit)${tab === 'track' ? ' − track expenses entered with the track (fuel, staff, vehicle)' : ''}. "Pays in" = average days from bill to payment this year.</div>`, '#/profit?tab=party');
+      <div class="muted small" style="margin:6px 2px">Profit after costs = profit on bills (sale before GST − purchase cost) − freight paid at booking − credit notes and returns (a sales return loses only its profit)${tab === 'track' ? ' − track expenses entered with the track (fuel, staff, vehicle)' : ''}. "Pays in" = average days from bill to payment this year.</div>`, '#/profit');
     wireTabs('#/profit');
     const draw = () => {
       const t = $('[data-q]').value.trim().toLowerCase(), o = $('[data-sort]').value;
@@ -347,7 +347,7 @@ function profit(q) {
   }
   if (tab === 'product') {
     // which product (or company) made how much: net sale value − purchase cost of each line, as in the ERP
-    if (!hasLineCost()) { frame('Profit', tabsHtml(T, tab) + NOLINES, '#/more'); return wireTabs('#/profit'); }
+    if (!hasLineCost()) { frame('Profit', tabsHtml(T, tab) + NOLINES, '#/profit'); return wireTabs('#/profit'); }
     const P = span(q.s || 'month', q.m), by = q.by === 'company' ? 'company' : 'product';
     const m = new Map(); let noCost = 0;
     for (const l of d.lines) {
@@ -366,7 +366,7 @@ function profit(q) {
       <div class="chips">${[['product', 'By product'], ['company', 'By company']].map(([k, l]) => `<a class="chip ${by === k ? 'on' : ''}" href="#/profit?tab=product&s=${P.k}&by=${k}">${l}</a>`).join('')}${q.co ? `<a class="chip on" href="#/profit?tab=product&s=${P.k}&by=product">✕ ${esc(q.co)}</a>` : ''}</div>
       <div class="filters"><input data-q placeholder="Find ${by}"><select data-sort>${[['high', 'Most profit first'], ['loss', 'Loss / least profit first'], ['pct', 'Highest margin %'], ['lowpct', 'Lowest margin %'], ['sale', 'Highest sale']].map(([k, l]) => `<option value="${k}" ${so === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="kpis" data-k style="margin-bottom:8px"></div><div class="card"><h3 data-h></h3><div class="list" data-list></div></div>
-      <div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted — the same figure as the ERP's profit reports, so the products add up to the bill-wise total.${noCost ? ` ${noCost} lines with no purchase cost are left out.` : ''}</div>`, '#/more');
+      <div class="muted small" style="margin:6px 2px">Profit = sale value before GST (after scheme and discount) − purchase cost of the batches sold, free goods counted — the same figure as the ERP's profit reports, so the products add up to the bill-wise total.${noCost ? ` ${noCost} lines with no purchase cost are left out.` : ''}</div>`, '#/profit');
     wireTabs('#/profit');
     const draw = () => {
       const t = $('[data-q]').value.trim().toLowerCase(), o = $('[data-sort]').value;
@@ -394,7 +394,7 @@ function profit(q) {
     frame('Profit', `${tabsHtml(T, tab)}${dayPicker('#/profit', day, '&tab=bill&sort=' + so)}
       <div class="kpis" style="margin-bottom:8px">${kpi('Profit', pfTxt(tot), `${rows.length} bills`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Cost', short(tot.cost))}${kpi('Loss bills', num(rows.filter(r => r.x.profit < 0).length), '', 'r')}</div>
       <div class="chips">${[['low', 'Lowest profit first'], ['high', 'Highest profit first'], ['pct', 'Lowest %']].map(([k, l]) => `<a class="chip ${so === k ? 'on' : ''}" href="#/profit?tab=bill&day=${day}&sort=${k}">${l}</a>`).join('')}</div>
-      <div class="card"><div class="list">${rows.map(b => { const p = S.idx.p.get(b.p); return `<a class="row" href="#/sales?day=${b.d}&q=${encodeURIComponent(b.n)}"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · sale ${short(b.s)} · cost ${short(b.c)}</small></span><span class="r">${pfTxt(b.x)}</span></a>`; }).join('') || '<div class="muted">No bills with products on this day</div>'}</div></div>${note}`, '#/more');
+      <div class="card"><div class="list">${rows.map(b => { const p = S.idx.p.get(b.p); return `<a class="row" href="#/sales?day=${b.d}&q=${encodeURIComponent(b.n)}"><span class="m"><b>${esc(p?.name || '')}</b><small>Bill ${esc(b.n)} · sale ${short(b.s)} · cost ${short(b.c)}</small></span><span class="r">${pfTxt(b.x)}</span></a>`; }).join('') || '<div class="muted">No bills with products on this day</div>'}</div></div>${note}`, '#/profit');
     wireTabs('#/profit');
     $('[data-day]').onchange = e => { location.hash = `#/profit?tab=bill&day=${e.target.value}&sort=${so}`; };
     return;
@@ -408,7 +408,7 @@ function profit(q) {
     frame('Profit', `${tabsHtml(T, tab)}${spanChips('#/profit?tab=day', P.k)}
       <div class="kpis" style="margin-bottom:8px">${kpi('Profit', pfTxt(tot), `${tot.n} bills · ${P.label}`, tot.profit < 0 ? 'r' : 'g')}${kpi('Sale value', short(tot.sale), 'before GST')}${kpi('Average a day', short(days.length ? tot.profit / days.length : 0), `${days.length} billing days`)}${kpi('Best day', days.length ? short(Math.max(...days.map(x => x.x.profit))) : '—')}</div>
       ${days.length > 1 ? `<div class="card"><h3>Profit by day</h3>${bars([...days].reverse().map(x => ({ label: x.d.slice(8), v: Math.max(0, x.x.profit) })))}</div>` : ''}
-      <div class="card"><div class="list">${days.map(x => `<a class="row" href="#/profit?tab=bill&day=${x.d}"><span class="m"><b>${new Date(x.d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })}</b><small>${x.x.n} bills · sale ${short(x.x.sale)}${x.cn.any ? ` · after credit notes ${short(x.cn.net)}` : ''}</small></span><span class="r">${pfTxt(x.x)}</span></a>`).join('') || '<div class="muted">No bills</div>'}</div></div>${notesCard(totN, P.label)}${note}`, '#/more');
+      <div class="card"><div class="list">${days.map(x => `<a class="row" href="#/profit?tab=bill&day=${x.d}"><span class="m"><b>${new Date(x.d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })}</b><small>${x.x.n} bills · sale ${short(x.x.sale)}${x.cn.any ? ` · after credit notes ${short(x.cn.net)}` : ''}</small></span><span class="r">${pfTxt(x.x)}</span></a>`).join('') || '<div class="muted">No bills</div>'}</div></div>${notesCard(totN, P.label)}${note}`, '#/profit');
     return wireTabs('#/profit', `&s=${P.k}`);
   }
   const months = [...withP.reduce((m, b) => m.set(b.d.slice(0, 7), (m.get(b.d.slice(0, 7)) || []).concat(b)), new Map())].sort().map(([k, l]) => ({ k, x: pf(l) }));
@@ -423,7 +423,7 @@ function profit(q) {
     ${months.length ? `<div class="card"><h3>Profit by month</h3>${bars(months.map(m => ({ label: m.k.slice(5), v: Math.max(0, m.x.profit) })))}</div>` : ''}
     <div class="card"><div class="tw"><table><thead><tr><th>Month</th><th class="n">Bills</th><th class="n">Sale</th><th class="n">Cost</th><th class="n">Profit</th><th class="n">%</th>${cnOn ? '<th class="n">Credit notes ±</th><th class="n">After notes</th>' : ''}</tr></thead>
       <tbody>${months.map(m => `<tr><td><a href="#/profit?tab=day&s=custom&m=${m.k}">${new Date(m.k + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</a></td><td class="n">${m.x.n}</td><td class="n">${short(m.x.sale)}</td><td class="n">${short(m.x.cost)}</td><td class="n ${m.x.profit < 0 ? 'red' : ''}">${short(m.x.profit)}</td><td class="n">${m.x.pct === null ? '' : m.x.pct.toFixed(1)}</td>${cnCell(m.cn)}</tr>`).join('')}</tbody>
-      <tfoot><tr><td>FY</td><td class="n">${tot.n}</td><td class="n">${short(tot.sale)}</td><td class="n">${short(tot.cost)}</td><td class="n">${short(tot.profit)}</td><td class="n">${tot.pct === null ? '' : tot.pct.toFixed(1)}</td>${cnCell(totN)}</tr></tfoot></table></div></div>${notesCard(totN, 'this FY')}${note}`, '#/more');
+      <tfoot><tr><td>FY</td><td class="n">${tot.n}</td><td class="n">${short(tot.sale)}</td><td class="n">${short(tot.cost)}</td><td class="n">${short(tot.profit)}</td><td class="n">${tot.pct === null ? '' : tot.pct.toFixed(1)}</td>${cnCell(totN)}</tr></tfoot></table></div></div>${notesCard(totN, 'this FY')}${note}`, '#/profit');
   wireTabs('#/profit');
 }
 function stoppedBuying() {
@@ -1028,7 +1028,7 @@ function reports() {
 // FAWin is counted once (AM leaves it out of the bank book, as on the PC)
 function moneyPage(q) {
   const d = S.data, M = d.money;
-  if (!M) return frame('Cash & bank', '<div class="alert b">The cash book and bank books come with the next data email from the updated AM — tap ⟳ after it arrives.</div>', '#/more');
+  if (!M) return frame('Cash & bank', '<div class="alert b">The cash book and bank books come with the next data email from the updated AM — tap ⟳ after it arrives.</div>', '#/money');
   const tab = q.tab === 'bank' && M.banks.length ? 'bank' : 'cash';
   // the account asked for, else the busiest one (most entries this year)
   const acct = tab === 'bank' ? (M.banks.find(b => String(b.id) === q.a) || [...M.banks].sort((x, y) => y.rows.length - x.rows.length)[0]) : null;
@@ -1049,7 +1049,7 @@ function moneyPage(q) {
     ${from < M.from ? `<div class="alert b small">The phone has entries from ${dmy(M.from)} (this financial year).</div>` : ''}
     ${book.start && to < book.start ? `<div class="alert b">This ${tab === 'bank' ? 'bank book' : 'cash book'} started on <b>${dmy(book.start)}</b>: earlier days are not counted. <a href="#/money?day=${book.start}${extra}">Go to ${dmy(book.start)}</a></div>` : book.start && from < book.start ? `<div class="alert b small">Started on ${dmy(book.start)} — counted from that day.</div>` : ''}
     <div class="kpis" style="margin-bottom:8px">${kpi('Opening', short(open), dmy(from))}${kpi('Money in', short(tin), ent(rows.filter(r => r[3] > 0).length), 'g')}${kpi('Money out', short(tout), ent(rows.filter(r => r[3] < 0).length), 'r')}${kpi('Closing', short(open + tin - tout), dmy(to), 'b')}</div>
-    <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, tab === 'bank' ? '#/money?tab=bank' : '#/money?tab=cash');
+    <div class="card"><h3><span>${ent(rows.length)}${month ? ' — ' + new Date(from + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : ''}</span><span>newest first</span></h3><div class="list" data-list></div></div>`, '#/money');
   wireTabs('#/money', `&day=${day}${month ? '&span=month' : ''}`);
   $('[data-day]').onchange = e => { location.hash = `#/money?day=${e.target.value}${extra}`; };
   const L = $('[data-list]');
@@ -1057,7 +1057,7 @@ function moneyPage(q) {
   more(L, lines, ({ r, bal: b }) => `<div class="row"><span class="m"><b>${esc(r[1])}</b><small>${month ? dmy(r[0]) + ' · ' : ''}${esc(r[2] || '')}${r[4] === 'F' ? ' · <span class="muted">FAWin</span>' : ''}</small></span><span class="r"><b class="${r[3] < 0 ? 'red' : 'green'}">${r[3] < 0 ? '−' : '+'}${money(Math.abs(r[3]))}</b><small class="muted" style="display:block">bal ${short(b)}</small></span></div>`, 50);
 }
 function moreMenu() {
-  frame('More', `<div class="card menu">${[['#/home', '🏠 Home'], ['#/collect', '💰 Collection'], ['#/order', '🛒 Order'], ['#/stock', '💊 Stock'], ['#/profit?tab=day', '💹 Profit (bill / day / month / product)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
+  frame('More', `<div class="card menu">${[['#/collect', '💰 Collection'], ['#/order', '🛒 Order'], ['#/stock', '💊 Stock'], ['#/profit?tab=day', '💹 Profit (bill / day / month / product)'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
 }
 async function archive(q) {
   frame('Older reports', `<div class="filters"><input type="date" data-from value="${esc(q.from || '')}"><input type="date" data-to value="${esc(q.to || '')}"><select data-k><option value="">All</option><option value="daily" ${q.k === 'daily' ? 'selected' : ''}>Daily reports (8 PM)</option></select><button class="btn sm" data-go>Search Gmail</button></div>
