@@ -157,13 +157,24 @@ const bars = (rows, f = short) => { const max = Math.max(1, ...rows.map(r => r.v
 
 // ───────────── layout ─────────────
 const NAV = [['#/home', '🏠', 'Home'], ['#/sales', '🧾', 'Sales'], ['#/money', '💵', 'Cash & bank'], ['#/order', '🛒', 'Order'], ['#/due', '📋', 'Dues']];
+// a newer data email should be in Gmail: the latest sending time (10:00 / 14:00 / 20:00 …) passed 15 minutes ago and the
+// data on the phone is older than it → that time ("14:00"), else null
+function newerDue(d) {
+  const times = (d.schedule && d.schedule.length ? d.schedule : ['10:00', '14:00', '20:00']).map(x => String(x).trim()).sort();
+  const p2 = x => String(x).padStart(2, '0'), ymd = x => `${x.getFullYear()}-${p2(x.getMonth() + 1)}-${p2(x.getDate())}`;
+  const n = new Date(Date.now() - 15 * 60000), hm = `${p2(n.getHours())}:${p2(n.getMinutes())}`;
+  let last = times.filter(x => x <= hm).pop(), day = ymd(n);
+  if (!last) { last = times[times.length - 1]; const y = new Date(n); y.setDate(y.getDate() - 1); day = ymd(y); }
+  return String(d.generated_at).slice(0, 16) < `${day} ${last}` ? last : null;
+}
 function frame(title, body, active) {
   const d = S.data, meta = JSON.parse(ls.get(LS.meta) || '{}');
   const ageH = d ? (Date.now() - new Date(String(d.generated_at).replace(' ', 'T')).getTime()) / 3600000 : 0;
   app().innerHTML = `<div class="top"><h1>${esc(title)}</h1><button data-refresh title="Get the latest data from Gmail">⟳</button><a class="topbtn" href="#/more" title="Parties, tracks, purchases, reports, settings">☰</a></div>
+    ${d && newerDue(d) ? `<button class="asof old due" data-refresh>⟳ The ${esc(newerDue(d))} data is ready in Gmail — tap here to get it</button>` : ''}
     ${d ? `<div class="asof ${ageH > 13 ? 'old' : ''}"><span>Data as of <b>${dmy(d.generated_at)} ${esc(String(d.generated_at).slice(11, 16))}</b>${d.fawin?.last_sync ? ` · FAWin sync ${esc(String(d.fawin.last_sync).slice(11, 16))}` : ''}</span><span>${meta.source === 'file' ? 'from file' : 'Gmail'}</span></div>` : ''}
     <main>${body}</main><nav class="nav">${NAV.map(([h, i, l]) => `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="i">${i}</span>${l}</a>`).join('')}</nav>`;
-  $('[data-refresh]').onclick = e => refreshFromGmail(e.target);
+  document.querySelectorAll('[data-refresh]').forEach(b => (b.onclick = e => refreshFromGmail(e.target)));
   window.scrollTo(0, 0);
 }
 const kpi = (l, v, s = '', c = '') => `<div class="kpi ${c}"><div class="l">${esc(l)}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
@@ -1165,5 +1176,7 @@ async function start() {
   try { await useFile(file, JSON.parse(ls.get(LS.meta) || '{}'), pw); route(); } catch (e) { passwordScreen(e.message); }
 }
 window.addEventListener('hashchange', () => { if (S.data || location.hash.startsWith('#/settings')) route(); });
+// back on the app with newer data waiting: fetch it by itself while Google sign-in is still valid (else the note asks for a tap)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.data && newerDue(S.data) && S.token && Date.now() < S.tokenExp - 60000) refreshFromGmail(null); });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 start();
