@@ -1039,6 +1039,7 @@ function reports() {
 // FAWin is counted once (AM leaves it out of the bank book, as on the PC)
 function moneyPage(q) {
   const d = S.data, M = d.money;
+  if (q.tab === 'chq') return chequePage(q);
   if (!M) return frame('Cash & bank', '<div class="alert b">The cash book and bank books come with the next data email from the updated AM — tap ⟳ after it arrives.</div>', '#/money');
   const tab = q.tab === 'bank' && M.banks.length ? 'bank' : 'cash';
   // the account asked for, else the busiest one (most entries this year)
@@ -1053,7 +1054,7 @@ function moneyPage(q) {
   const extra = `&tab=${tab}${acct ? '&a=' + acct.id : ''}${month ? '&span=month' : ''}`;
   const bal0 = b => b.open + sum(b.rows.filter(r => r[0] <= to), r => r[3]);
   const ent = n => `${n} ${n === 1 ? 'entry' : 'entries'}`;
-  frame('Cash & bank', `${tabsHtml([['cash', '💵 Cash book'], ['bank', '🏦 Bank book']], tab)}
+  frame('Cash & bank', `${tabsHtml([['cash', '💵 Cash'], ['bank', '🏦 Bank'], ['chq', '🧾 Cheques']], tab)}
     ${tab === 'bank' ? (M.banks.length ? `<div class="chips">${M.banks.map(b => `<a class="chip ${b === acct ? 'on' : ''}" href="#/money?tab=bank&a=${b.id}&day=${day}${month ? '&span=month' : ''}">${esc(b.name)} <span class="muted">${short(bal0(b))}</span></a>`).join('')}</div>` : '<div class="alert b">No bank accounts in AM</div>') : ''}
     ${dayPicker('#/money', day, extra)}
     <div class="chips"><a class="chip ${month ? '' : 'on'}" href="#/money?day=${day}${extra.replace('&span=month', '')}">This day</a><a class="chip ${month ? 'on' : ''}" href="#/money?day=${day}${extra.replace('&span=month', '')}&span=month">Whole month</a></div>
@@ -1066,6 +1067,29 @@ function moneyPage(q) {
   const L = $('[data-list]');
   if (!lines.length) { L.innerHTML = '<div class="muted">No entries</div>'; return; }
   more(L, lines, ({ r, bal: b }) => `<div class="row"><span class="m"><b>${esc(r[1])}</b><small>${month ? dmy(r[0]) + ' · ' : ''}${esc(r[2] || '')}${r[4] === 'F' ? ' · <span class="muted">FAWin</span>' : ''}</small></span><span class="r"><b class="${r[3] < 0 ? 'red' : 'green'}">${r[3] < 0 ? '−' : '+'}${money(Math.abs(r[3]))}</b><small class="muted" style="display:block">bal ${short(b)}</small></span></div>`, 50);
+}
+// cheque register from AM: in hand (due to deposit / post-dated), deposited, cleared and returned (last 60 days)
+const CHQ_ST = { due: 'Due to deposit', later: 'Post-dated', deposited: 'Deposited', cleared: 'Cleared', returned: 'Returned' };
+function chequePage(q) {
+  const d = S.data, all = d.chq;
+  const tabs = tabsHtml([['cash', '💵 Cash'], ['bank', '🏦 Bank'], ['chq', '🧾 Cheques']], 'chq');
+  if (!all) { frame('Cash & bank', `${tabs}<div class="alert b">Cheques come with the next data email from the updated AM — tap ⟳ after it arrives.</div>`, '#/money'); wireTabs('#/money'); return; }
+  const kind = c => (c.s === 'in_hand' ? (c.d <= d.today ? 'due' : 'later') : c.s);
+  const g = k => all.filter(c => kind(c) === k);
+  const f = CHQ_ST[q.f] ? q.f : g('due').length ? 'due' : g('later').length ? 'later' : 'deposited';
+  const rows = g(f);
+  if (f === 'cleared' || f === 'returned') rows.reverse(); // newest first
+  const late = c => (kind(c) === 'due' ? Math.round((new Date(d.today) - new Date(c.d)) / 864e5) : 0);
+  frame('Cash & bank', `${tabs}
+    <div class="kpis" style="margin-bottom:8px">${['due', 'later', 'deposited', 'returned'].map(k => kpi(CHQ_ST[k], short(sum(g(k), c => c.a)), `${g(k).length} cheque${g(k).length === 1 ? '' : 's'}`, k === 'due' && g(k).length ? 'r' : k === 'returned' && g(k).length ? 'r' : k === 'later' ? 'b' : '')).join('')}</div>
+    <div class="chips">${Object.entries(CHQ_ST).map(([k, l]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/money?tab=chq&f=${k}">${l} <span class="muted">${g(k).length}</span></a>`).join('')}</div>
+    <div class="card"><h3><span>${CHQ_ST[f]}</span><span>${money(sum(rows, c => c.a))}</span></h3><div class="list" data-list></div></div>`, '#/money');
+  wireTabs('#/money');
+  const L = $('[data-list]');
+  if (!rows.length) { L.innerHTML = '<div class="muted">No cheques</div>'; return; }
+  more(L, rows, c => `<div class="row"><span class="m"><b>${esc(c.p)}</b><small style="display:block">Chq ${esc(c.n)} · dated ${dmy(c.d)}${late(c) > 0 ? ` · <b class="red">${late(c)} day${late(c) > 1 ? 's' : ''} waiting</b>` : ''}</small>
+    <small style="display:block">${[c.b, c.c].filter(Boolean).map(esc).join(' · ')}${c.by ? `${c.b || c.c ? ' · ' : ''}by ${esc(c.by)}` : ''}${c.r ? ` on ${dmy(c.r)}` : ''}${c.dd ? ` · deposited ${dmy(c.dd)}${c.ac ? ' in ' + esc(c.ac) : ''}` : ''}${c.cd ? ' · cleared ' + dmy(c.cd) : ''}${c.rd ? ` · <span class="red">returned ${dmy(c.rd)}${c.why ? ' — ' + esc(c.why) : ''}</span>` : ''}</small></span>
+    <span class="r"><b class="${kind(c) === 'returned' ? 'red' : ''}">${money(c.a)}</b></span></div>`, 50);
 }
 function moreMenu() {
   frame('More', `<div class="card menu">${[['#/profit', '💹 Profit (party / track / bill / day / month / product)'], ['#/collect', '💰 Collection'], ['#/stock', '💊 Stock'], ['#/parties', '👥 Parties'], ['#/tracks', '🛣 Tracks'], ['#/sales?tab=products&s=30', '💊 Product sales'], ['#/sales?tab=parties&s=30', '📉 Parties that stopped buying'], ['#/collect?tab=follow', '📞 Payment follow-up'], ['#/purchases', '📦 Purchases & payable'], ['#/order?tab=sent', '🛒 Sent purchase orders'], ['#/edits', '🕵 Changes in FAWin'], ['#/reports', '📈 Reports'], ['#/archive', '🗄 Older reports (Gmail)'], ['#/settings', '⚙ Settings']].map(([h, l]) => `<a href="${h}">${l}</a>`).join('')}</div>`, '#/more');
